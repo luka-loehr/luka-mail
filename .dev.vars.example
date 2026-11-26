@@ -1,0 +1,4 @@
+API_KEY_PEPPER=replace-with-64-random-bytes
+AUDIT_IP_PEPPER=replace-with-an-independent-64-random-bytes
+CLOUDFLARE_API_TOKEN=replace-with-a-zone-scoped-email-routing-token
+DELIVERABILITY_API_TOKEN=replace-with-an-account-email-and-zone-analytics-read-token

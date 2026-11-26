@@ -1,0 +1,2 @@
+# Test fixture: arbitrary high-entropy password in a unit test (tests/crypto.test.ts, removed in 84dcc63), not a credential.
+dcab9e381723bc892c8a8f85007d23164b95d8fa:tests/crypto.test.ts:generic-api-key:17

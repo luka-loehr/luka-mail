@@ -1,0 +1,51 @@
+{
+  "name": "lmail",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted personal email infrastructure on Cloudflare Workers with AI triage, knowledge graph, and native clients",
+  "license": "Apache-2.0",
+  "repository": "github:luka-loehr/luka-mail",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "build": "tsc -b",
+    "check": "tsc -b --pretty false",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:all": "npm run cf:types:check && npm run check && npm run lint && npm test && npm run build",
+    "db:migrate:local": "wrangler d1 migrations apply lmail --local",
+    "db:migrate:remote": "wrangler d1 migrations apply lmail --remote",
+    "deploy": "npm run build && wrangler deploy --keep-vars",
+    "configure:deliverability": "node scripts/configure-deliverability.mjs",
+    "cf:types": "wrangler types --include-runtime false src/worker/worker-configuration.d.ts",
+    "cf:types:check": "wrangler types --include-runtime false --check src/worker/worker-configuration.d.ts"
+  },
+  "dependencies": {
+    "@simplewebauthn/server": "^13.3.2",
+    "ai": "^7.0.68",
+    "hono": "4.13.19",
+    "postal-mime": "2.7.6",
+    "workers-ai-provider": "^4.0.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.8.4",
+    "@cloudflare/workers-types": "^5.20261019.1",
+    "@eslint/js": "10.0.1",
+    "@types/node": "26.2.0",
+    "eslint": "10.8.0",
+    "globals": "17.9.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.66.0",
+    "vitest": "4.1.12",
+    "wrangler": "^4.164.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "overrides": {
+    "vite": "^8.3.8",
+    "minimatch": "^11.0.9"
+  }
+}

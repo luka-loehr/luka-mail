@@ -1,0 +1,72 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "lmail",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-08-11",
+  "compatibility_flags": ["nodejs_compat", "enable_request_signal"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "mail.example.com", "custom_domain": true },
+    { "pattern": "mta-sts.example.com", "custom_domain": true }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "lmail",
+      "database_id": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  "r2_buckets": [
+    { "binding": "MAIL", "bucket_name": "lmail" }
+  ],
+  "queues": {
+    "producers": [
+      { "binding": "MAIL_QUEUE", "queue": "lmail-inbound" }
+    ],
+    "consumers": [
+      { "queue": "lmail-inbound", "max_batch_size": 5, "max_batch_timeout": 2, "max_retries": 5, "dead_letter_queue": "lmail-inbound-dlq" },
+      { "queue": "lmail-inbound-dlq", "max_batch_size": 5, "max_batch_timeout": 2, "max_retries": 0 }
+    ]
+  },
+  "ratelimits": [
+    { "name": "AUTH_RATE_LIMITER", "namespace_id": "41001", "simple": { "limit": 120, "period": 60 } },
+    { "name": "API_RATE_LIMITER", "namespace_id": "41004", "simple": { "limit": 300, "period": 60 } },
+    { "name": "SEND_RATE_LIMITER", "namespace_id": "41002", "simple": { "limit": 30, "period": 60 } },
+    { "name": "ADMIN_RATE_LIMITER", "namespace_id": "41003", "simple": { "limit": 10, "period": 60 } }
+  ],
+  "send_email": [
+    { "name": "EMAIL" }
+  ],
+  "ai": { "binding": "AI" },
+  "vectorize": [
+    { "binding": "VECTORIZE", "index_name": "lmail-messages" }
+  ],
+  "limits": { "cpu_ms": 300000 },
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  },
+  "vars": {
+    "APP_NAME": "lmail",
+    "OWNER_EMAIL": "owner@example.com",
+    "OWNER_NAME": "Owner",
+    "MAIL_HOST": "mail.example.com",
+    "WORKER_NAME": "lmail",
+    "APNS_TOPIC": "com.example.lmail",
+    "CLOUDFLARE_ACCOUNT_ID": "",
+    "MANAGED_DOMAINS_JSON": "{}",
+    "DMARC_REPORT_ADDRESS": "",
+    "TLS_REPORT_ADDRESS": "",
+    "OWNER_PROFILE": "",
+    "OWNER_STYLE_GUIDE": "",
+    "IDENTITY_SIGNATURES_JSON": "{}",
+    "AGENT_SENDER_DOMAINS": "",
+    "OWNER_TIMEZONE": "UTC",
+    "AGENT_MODEL": "@cf/zai-org/glm-5.3-flash",
+    "KG_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

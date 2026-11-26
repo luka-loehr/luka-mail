@@ -1,0 +1,5 @@
+// Copy this file to ios/Config/Local.xcconfig to override signing and bundle IDs locally.
+// ios/Config/Local.xcconfig is gitignored and optional.
+//
+// DEVELOPMENT_TEAM = YOUR_APPLE_TEAM_ID
+// LMAIL_BUNDLE_IDENTIFIER = com.yourcompany.lmail

@@ -1,0 +1,25 @@
+[package]
+name = "lmail"
+version = "0.1.0"
+edition = "2024"
+description = "Self-hosted email CLI for lmail"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+clap = { version = "4", features = ["derive", "env"] }
+mime_guess = "2"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rpassword = "7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+urlencoding = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true

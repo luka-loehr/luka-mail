@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 340" width="1280" height="340" role="img" aria-label="lmail — self-hosted Cloudflare-native email">
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="45%" r="55%">
+      <stop offset="0%" stop-color="#f97316" stop-opacity="0.14"/>
+      <stop offset="55%" stop-color="#f97316" stop-opacity="0.03"/>
+      <stop offset="100%" stop-color="#09090b" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="border" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.14"/>
+      <stop offset="50%" stop-color="#ffffff" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#f97316" stop-opacity="0.22"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#ffffff" stroke-opacity="0.025" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1280" height="340" rx="16" fill="#09090b"/>
+  <rect width="1280" height="340" rx="16" fill="url(#grid)"/>
+  <rect width="1280" height="340" rx="16" fill="url(#glow)"/>
+  <rect x="0.75" y="0.75" width="1278.5" height="338.5" rx="15.25" fill="none" stroke="url(#border)" stroke-width="1.5"/>
+
+  <!-- Minimal geometric envelope mark -->
+  <g transform="translate(468, 108)">
+    <rect x="0" y="0" width="64" height="48" rx="10" fill="none" stroke="#f4f4f5" stroke-width="2.2"/>
+    <path d="M 4 8 L 32 29 L 60 8" fill="none" stroke="#f4f4f5" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="56" cy="8" r="4" fill="#f97316"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="556" y="150"
+        font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="68" font-weight="600" letter-spacing="-0.03em" fill="#fafafa">lmail</text>
+
+  <!-- Letter-spaced mono subtitle -->
+  <text x="640" y="216" text-anchor="middle"
+        font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace"
+        font-size="14" font-weight="500" letter-spacing="0.26em" fill="#a1a1aa">SELF-HOSTED CLOUDFLARE EMAIL · WORKER · CLI · APPLE</text>
+
+  <!-- Subtle bottom rule -->
+  <line x1="480" y1="246" x2="800" y2="246" stroke="#27272a" stroke-width="1"/>
+  <text x="640" y="274" text-anchor="middle"
+        font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace"
+        font-size="12" letter-spacing="0.14em" fill="#71717a">D1 · R2 · QUEUES · VECTORIZE · WORKERS AI · PASSKEYS</text>
+</svg>

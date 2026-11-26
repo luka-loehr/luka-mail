@@ -1,0 +1,6 @@
+// Shared build settings for lmail iOS and macOS targets.
+// Copy Local.xcconfig.example to Local.xcconfig to override signing locally.
+DEVELOPMENT_TEAM =
+LMAIL_BUNDLE_IDENTIFIER = com.example.lmail
+
+#include? "Local.xcconfig"
