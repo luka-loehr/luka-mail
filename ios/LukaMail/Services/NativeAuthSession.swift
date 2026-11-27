@@ -36,8 +36,13 @@ enum ServerEndpoint {
     }
 
     static func saved(in defaults: UserDefaults = .standard) -> URL? {
-        guard let raw = defaults.string(forKey: defaultsKey) else { return nil }
-        return normalize(raw)
+        if let raw = defaults.string(forKey: defaultsKey) {
+            return normalize(raw)
+        }
+        if let bundled = Bundle.main.object(forInfoDictionaryKey: "LMAILDefaultServerHost") as? String {
+            return normalize(bundled)
+        }
+        return nil
     }
 
     static func save(_ url: URL, in defaults: UserDefaults = .standard) {
@@ -45,7 +50,7 @@ enum ServerEndpoint {
     }
 
     static func clear(in defaults: UserDefaults = .standard) {
-        defaults.removeObject(forKey: defaultsKey)
+        defaults.set("", forKey: defaultsKey)
     }
 
     static func displayHost(for urlString: String) -> String {

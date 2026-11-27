@@ -3,3 +3,5 @@
 //
 // DEVELOPMENT_TEAM = YOUR_APPLE_TEAM_ID
 // LMAIL_BUNDLE_IDENTIFIER = com.yourcompany.lmail
+// LMAIL_DISPLAY_NAME = lmail
+// LMAIL_DEFAULT_SERVER_HOST = mail.example.com

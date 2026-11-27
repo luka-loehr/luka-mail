@@ -3,7 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>lmail</string>
+	<string>$(LMAIL_DISPLAY_NAME)</string>
+	<key>LMAILDefaultServerHost</key>
+	<string>$(LMAIL_DEFAULT_SERVER_HOST)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

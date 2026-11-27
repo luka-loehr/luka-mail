@@ -2,5 +2,7 @@
 // Copy Local.xcconfig.example to Local.xcconfig to override signing locally.
 DEVELOPMENT_TEAM =
 LMAIL_BUNDLE_IDENTIFIER = com.example.lmail
+LMAIL_DISPLAY_NAME = lmail
+LMAIL_DEFAULT_SERVER_HOST =
 
 #include? "Local.xcconfig"
