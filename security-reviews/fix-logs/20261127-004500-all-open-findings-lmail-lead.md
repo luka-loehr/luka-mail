@@ -9,7 +9,7 @@ Session: lmail-lead session 9ce103f8-523d-4541-be37-a1c6ef728de0 of 2026-11-27
 Start: 2026-11-27T00:30:00+01:00
 End: 2026-11-27T00:56:00+01:00
 Commits: 26f4d72
-Deploy: n/a (self-hosted open-source repository; live deployment gated on operator go)
+Deploy: yes (Worker version 1a683f22-4f19-4e7f-860c-57bdad936c59 deployed 2026-11-27, tag 8024b33, D1 migrations 0024 + 0025)
 
 ## Order
 

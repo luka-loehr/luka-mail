@@ -17,10 +17,10 @@
   "repo_state": "203b994 (reviewed); fixes in 26f4d72",
   "environment": "local isolated workstation + ephemeral workerd D1/R2 harness + cargo test + iOS Simulator / macOS build within AUTHORIZATION.md",
   "authorization_ref": "security-reviews/AUTHORIZATION.md#authorized-targets",
-  "production_requests": "none",
+  "production_requests": "9 passive post-deploy verification requests (health, openapi.json, auth/status, mta-sts policies)",
   "test_data": "synthetic @example.com / @example.org addresses and ephemeral test fixtures only; zero requests to live mail deployments",
   "cleanup": "checked",
-  "external_services": "none",
+  "external_services": "production-passive",
   "register_status": "synced",
   "redaction_status": "checked"
 }
