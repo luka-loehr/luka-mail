@@ -1,0 +1,1 @@
+- 2026-11-27: `20261127-002000-browser-clients-webview-cli-client-reviewer` (`browser`): 2 findings (fixed in `26f4d72`), 2 PASS statements.

@@ -1,0 +1,26 @@
+{
+  "repository": "luka-loehr/luka-mail",
+  "public": true,
+  "allowed_emails": [],
+  "authorization_invariants": [
+    "npx wrangler dev --port 8790 --ip 127.0.0.1",
+    "passive and low volume only",
+    "at most 20 requests",
+    "no load, stress or dos",
+    "never send real e-mail to external addresses",
+    "never delete or modify production data of the owner account (`<owner-email>`)",
+    "never touch other workers",
+    "never print, log, screenshot or commit secret values"
+  ],
+  "forbidden_patterns": [
+    { "pattern": "\\blm_(?:live|device)_[A-Za-z0-9_-]{16}_[A-Za-z0-9_-]{40,}", "label": "lmail bearer API key" },
+    { "pattern": "\\b__Host-lmail-session=[A-Za-z0-9_%-]{16,}", "label": "lmail session cookie value" }
+  ],
+  "forbidden_token_sha256": [
+    "6c43964bf1072bea9b2281b73a46aef933d850002f78c1fb705cd1c10e196392",
+    "7c82602500857aa6ed0cf38c4c3e4ec645bdcaa82c00b9155eb08be100c778a9",
+    "8b9252648d45076f864f4d25824b51e3ca47848903e7a848a97d593642c8aac4",
+    "cbe370481704cef068c18bdcbe262329c59824d6c87e96510a53f022e899ab04",
+    "76d754b7646b3127f492ec9dcaac287a50f68c1e6051a1b66648797db52b5a86"
+  ]
+}

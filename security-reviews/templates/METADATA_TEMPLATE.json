@@ -1,0 +1,22 @@
+{
+  "run_id": "YYYYMMDD-HHMMSS-track-scope-agent",
+  "track": "architecture | threat-model | service-pentest | crypto-implementation | system-audit | quality-maintainability | operations | privacy | baseline | browser | reviewer-pack",
+  "scope": "<scope-slug>",
+  "targets": ["static analysis | local wrangler dev (127.0.0.1:8790, local D1/R2) | production https://inkside.ll-labs.workers.dev (passive only)"],
+  "agent": "<name or thread>",
+  "model": "<exact model id or unknown>",
+  "session": "<session id or description>",
+  "tooling": "<Claude Code, browser-rs MCP, curl, wrangler, gh, dairo MCP>",
+  "status": "in_review",
+  "started_at": "YYYY-MM-DDTHH:MM:SS+02:00",
+  "ended_at": null,
+  "repo_state": "<commit>",
+  "environment": "<static analysis | local wrangler dev at <commit> | production deploy <version id>>",
+  "authorization_ref": "security-reviews/AUTHORIZATION.md#authorized-targets",
+  "production_requests": "none | <count> requests to <endpoints> (passive, within the production budget)",
+  "test_data": "none | <run marker and classes>",
+  "cleanup": "not_applicable | pending | checked | intentionally_retained | blocked",
+  "external_services": "none | production-passive | dairo-test-inbox | gemini (local, counted) | stripe-test",
+  "register_status": "pending",
+  "redaction_status": "pending"
+}
