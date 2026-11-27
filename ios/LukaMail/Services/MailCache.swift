@@ -223,6 +223,10 @@ actor MailCache {
     private func writeData(_ data: Data, to filename: String) {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            var resource = URLResourceValues()
+            resource.isExcludedFromBackup = true
+            var mutableDirectory = directory
+            try? mutableDirectory.setResourceValues(resource)
             try data.write(to: directory.appending(path: filename), options: [.atomic, .completeFileProtection])
             scheduleBlobPruneIfNeeded()
         } catch {

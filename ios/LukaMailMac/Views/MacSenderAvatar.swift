@@ -89,7 +89,7 @@ private struct LoadedSenderLogo {
 }
 
 @MainActor
-private final class MacSenderLogoImageCache {
+final class MacSenderLogoImageCache {
     static let shared = MacSenderLogoImageCache()
 
     private let images = NSCache<NSString, NSImage>()
@@ -99,6 +99,13 @@ private final class MacSenderLogoImageCache {
     private init() {
         images.countLimit = 256
         images.totalCostLimit = 16 * 1_024 * 1_024
+    }
+
+    func clear() {
+        requests.values.forEach { $0.cancel() }
+        requests = [:]
+        addressAliases = [:]
+        images.removeAllObjects()
     }
 
     func cachedImage(address: String, cacheVersion: Int, etag: String?, pixelSize: Int) -> NSImage? {
@@ -150,6 +157,7 @@ private final class MacSenderLogoImageCache {
     }
 
     nonisolated private static func decode(_ asset: SenderLogoAsset, pixelSize: Int) -> NSImage? {
+        guard !asset.data.isEmpty, asset.data.count <= 2_000_000 else { return nil }
         if !asset.contentType.localizedCaseInsensitiveContains("svg"),
            let source = CGImageSourceCreateWithData(asset.data as CFData, nil),
            let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [

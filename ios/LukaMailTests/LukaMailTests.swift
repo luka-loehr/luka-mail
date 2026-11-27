@@ -418,6 +418,26 @@ struct LukaMailTests {
                                                             available: [added]) == added.address)
     }
 
+    @Test @MainActor
+    func spamMessagesStayOutOfInboxDeltasAndInlineAttachmentsRejectUnsafeTypes() {
+        var spamMessage = Self.testMessage(id: "spam-1", folder: "inbox", receivedAt: "2026-08-12T12:00:00Z")
+        spamMessage.spam = true
+        let spamChange = MailboxChange(revision: "9", kind: "message", id: spamMessage.id, operation: "upsert",
+            threadId: spamMessage.threadId, previousFolder: nil, message: spamMessage, draft: nil)
+        #expect(MailStore.applying(spamChange, to: [], mailbox: .inbox, nextCursor: nil).isEmpty)
+
+        #expect(MailStore.sanitizedInlineImageSpec(contentId: "<banner@demo>", contentType: "image/png; name=banner.png")?.mime == "image/png")
+        #expect(MailStore.sanitizedInlineImageSpec(contentId: "<evil@demo>", contentType: "image/svg+xml") == nil)
+        #expect(MailStore.sanitizedInlineImageSpec(contentId: "<evil@demo>", contentType: "image/png\" onerror=\"alert(1)") == nil)
+        #expect(MailStore.sanitizedInlineImageSpec(contentId: "bad\"cid", contentType: "image/png") == nil)
+
+        let attachment = MailAttachment(id: "../escape/../../id", filename: "..\\..\\secret.pdf",
+                                        contentType: "application/pdf", contentId: nil, size: 12, disposition: "attachment")
+        let tempURL = attachment.temporaryFileURL()
+        #expect(tempURL.deletingLastPathComponent().lastPathComponent == "LukaMail")
+        #expect(!tempURL.lastPathComponent.contains(".."))
+    }
+
     private static func testMessage(id: String, folder: String, receivedAt: String) -> MailMessage {
         MailMessage(id: id, threadId: "thread-\(id)", direction: "inbound", folder: folder,
             subject: id, sender: MailAddress(address: "sender@example.com"),

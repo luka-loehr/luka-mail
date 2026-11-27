@@ -76,8 +76,6 @@ final class MailStore {
 
     private var nextCursor: String?
     private var client: APIClient?
-    /// The signed-in API client, for the Agent tab.
-    var agentAPI: APIClient? { client }
     private var sessionWho: WhoAmI?
     private var contactsIdentity: String?
     @ObservationIgnored private var contactRequestGeneration: UUID?
@@ -375,6 +373,7 @@ final class MailStore {
             return
         }
         let currentEndpoint = URL(string: endpoint)
+        let currentClient = client
         var revocationError: Error?
         var keychainError: Error?
         var cacheError: Error?
@@ -384,6 +383,12 @@ final class MailStore {
             accessToken = nil
             keychainError = error
         }
+        #if os(iOS)
+        if let pushToken = PushNotificationCoordinator.shared.deviceToken, let currentClient {
+            try? await currentClient.unregisterPushDevice(token: pushToken, environment: PushNotificationCoordinator.environment)
+        }
+        PushNotificationCoordinator.shared.clearRegistration()
+        #endif
         do { try KeychainStore.deleteAccessToken() }
         catch { if keychainError == nil { keychainError = error } }
         do { try await clearSessionState(clearCache: true) }
@@ -416,6 +421,16 @@ final class MailStore {
         senderLogos = [:]
         missingSenderLogos = []
         logoCacheVersion += 1
+        #if os(iOS)
+        SenderLogoImageCache.shared.clear()
+        #elseif os(macOS)
+        MacSenderLogoImageCache.shared.clear()
+        #endif
+        let tempPreviewDir = FileManager.default.temporaryDirectory.appending(path: "LukaMail", directoryHint: .isDirectory)
+        try? FileManager.default.removeItem(at: tempPreviewDir)
+        if !isDemoMode {
+            try? FileManager.default.removeItem(at: MailDemo.cacheDirectory)
+        }
         UserDefaults.standard.removeObject(forKey: "senderLogoBackfillCursor")
         UserDefaults.standard.removeObject(forKey: "senderLogoBackfillCursorVersion")
         UserDefaults.standard.removeObject(forKey: "senderLogoBackfillVersion")
@@ -454,6 +469,10 @@ final class MailStore {
         connectionLabel = "Not signed in"
         connectionStatus = .online
         lastSuccessfulSync = nil
+        selectedInbox = ""
+        identity = ""
+        UserDefaults.standard.removeObject(forKey: "selectedInbox")
+        UserDefaults.standard.removeObject(forKey: "identity")
         if clearCache { try await clearLocalCache() }
     }
 
@@ -724,10 +743,10 @@ final class MailStore {
 
     static func message(_ message: MailMessage, belongsTo mailbox: Mailbox) -> Bool {
         switch mailbox {
-        case .inbox: message.folder == "inbox"
-        case .starred: message.starred && message.folder != "trash"
-        case .sent: message.folder == "sent"
-        case .archive: message.folder == "archive"
+        case .inbox: message.folder == "inbox" && message.spam != true
+        case .starred: message.starred && message.folder != "trash" && message.spam != true
+        case .sent: message.folder == "sent" && message.spam != true
+        case .archive: message.folder == "archive" && message.spam != true
         case .trash: message.folder == "trash"
         case .drafts: false
         }
@@ -1165,6 +1184,23 @@ final class MailStore {
         return data
     }
 
+    nonisolated static func sanitizedInlineImageSpec(contentId: String?, contentType: String) -> (cid: String, mime: String)? {
+        guard let rawCid = contentId?.trimmingCharacters(in: CharacterSet(charactersIn: "<> \t\r\n")),
+              !rawCid.isEmpty, rawCid.count <= 254,
+              rawCid.range(of: #"^[A-Za-z0-9._@+-]+$"#, options: .regularExpression) != nil else {
+            return nil
+        }
+        let rawMime = contentType.components(separatedBy: ";").first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        let safeRasterTypes: Set<String> = [
+            "image/png", "image/jpeg", "image/jpg", "image/gif",
+            "image/webp", "image/avif", "image/bmp", "image/heic", "image/heif",
+        ]
+        guard safeRasterTypes.contains(rawMime) else { return nil }
+        return (rawCid, rawMime == "image/jpg" ? "image/jpeg" : rawMime)
+    }
+
     func inlineImageData(for attachments: [MailAttachment]) async -> [String: String] {
         guard let client else { return [:] }
         let cacheEndpoint = endpoint
@@ -1172,7 +1208,8 @@ final class MailStore {
         let maximumAggregateSize = 10_000_000
         var aggregateSize = 0
         let eligible = attachments.filter { attachment in
-            guard attachment.contentId != nil, attachment.size <= 5_000_000,
+            guard Self.sanitizedInlineImageSpec(contentId: attachment.contentId, contentType: attachment.contentType) != nil,
+                  attachment.size <= 5_000_000,
                   aggregateSize + attachment.size <= maximumAggregateSize else { return false }
             aggregateSize += attachment.size
             return true
@@ -1184,7 +1221,10 @@ final class MailStore {
             let entries = await withTaskGroup(of: (String, String)?.self, returning: [(String, String)].self) { group in
                 for attachment in batch {
                     group.addTask { [cache] in
-                        guard let id = attachment.contentId else { return nil }
+                        guard let spec = Self.sanitizedInlineImageSpec(
+                            contentId: attachment.contentId,
+                            contentType: attachment.contentType
+                        ) else { return nil }
                         let data: Data
                         if let cached = await cache.attachment(id: attachment.id, endpoint: cacheEndpoint, identity: inbox) {
                             data = cached
@@ -1193,8 +1233,7 @@ final class MailStore {
                             data = fetched
                             await cache.saveAttachment(fetched, id: attachment.id, endpoint: cacheEndpoint, identity: inbox)
                         }
-                        return (id.trimmingCharacters(in: CharacterSet(charactersIn: "<>")),
-                                "data:\(attachment.contentType);base64,\(data.base64EncodedString())")
+                        return (spec.cid, "data:\(spec.mime);base64,\(data.base64EncodedString())")
                     }
                 }
                 var batchResult: [(String, String)] = []

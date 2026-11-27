@@ -55,24 +55,27 @@ export async function runMaintenance(env: Env, cleanup: boolean): Promise<Mainte
   }
 
   if (cleanup) {
-    const windowStart = Math.floor(Date.now() / 60_000);
     await env.DB.batch([
-      env.DB.prepare("DELETE FROM api_rate_limits WHERE window_start < ?").bind(windowStart - 10_080),
       env.DB.prepare("DELETE FROM audit_logs WHERE created_at < datetime('now', '-180 days')"),
+      env.DB.prepare("DELETE FROM ai_runs WHERE created_at < datetime('now', '-90 days')"),
+      env.DB.prepare("DELETE FROM autopilot_actions WHERE created_at < datetime('now', '-180 days')"),
+      env.DB.prepare("DELETE FROM push_notification_outbox WHERE created_at < datetime('now', '-24 hours') OR attempts >= 10"),
+      env.DB.prepare("DELETE FROM push_devices WHERE disabled_at IS NOT NULL AND updated_at < datetime('now', '-30 days')"),
       env.DB.prepare(`DELETE FROM send_requests WHERE status IN ('complete', 'failed') AND created_at < datetime('now', '-30 days')`),
       env.DB.prepare("DELETE FROM send_requests WHERE created_at < datetime('now', '-90 days')"),
-      env.DB.prepare("DELETE FROM webauthn_challenges WHERE expires_at <= CURRENT_TIMESTAMP"),
-      env.DB.prepare("DELETE FROM web_sessions WHERE expires_at <= CURRENT_TIMESTAMP"),
-      env.DB.prepare("DELETE FROM native_authorization_requests WHERE expires_at <= CURRENT_TIMESTAMP"),
-      env.DB.prepare("DELETE FROM native_authorization_codes WHERE expires_at <= CURRENT_TIMESTAMP"),
-      env.DB.prepare("DELETE FROM native_sessions WHERE expires_at <= CURRENT_TIMESTAMP"),
+      env.DB.prepare("DELETE FROM webauthn_challenges WHERE datetime(expires_at) <= datetime('now')"),
+      env.DB.prepare("DELETE FROM web_sessions WHERE datetime(expires_at) <= datetime('now')"),
+      env.DB.prepare("DELETE FROM native_authorization_requests WHERE datetime(expires_at) <= datetime('now')"),
+      env.DB.prepare("DELETE FROM native_authorization_codes WHERE datetime(expires_at) <= datetime('now')"),
+      env.DB.prepare("DELETE FROM native_sessions WHERE datetime(expires_at) <= datetime('now')"),
     ]);
   }
 
   const [outbound, messages, queueMetrics] = await Promise.all([
     env.DB.prepare(`SELECT COUNT(*) AS count FROM send_requests
       WHERE status IN ('processing', 'reserved', 'sending', 'partial', 'unknown')`).first<{ count: number }>(),
-    env.DB.prepare("SELECT COUNT(*) AS count FROM messages WHERE status = 'failed'").first<{ count: number }>(),
+    env.DB.prepare("SELECT COUNT(*) AS count FROM messages WHERE status = 'failed' AND updated_at >= datetime('now', '-7 days')")
+      .first<{ count: number }>(),
     env.MAIL_QUEUE.metrics().catch(() => null),
   ]);
   const queueOldestAgeSeconds = queueMetrics?.oldestMessageTimestamp

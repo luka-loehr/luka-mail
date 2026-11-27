@@ -1,9 +1,7 @@
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
-import { runMailAgent } from "./agent";
-import { listChats, markChatDraftSent, publicChatDraft, readChat, runChatTurn, updateChatDraft, type ChatDraftRow } from "./agent-chat";
-import { auditRequest, hasScope, issueApiKey, issueDeviceApiKey, requireApiKey, requireScope, securityHeaders, type ApiVariables } from "./auth";
+import { auditRequest, hasScope, issueApiKey, issueDeviceApiKey, requireApiKey, requireScope, type ApiVariables } from "./auth";
 import { authenticationResultsFromRawHeaders, senderLogo, senderLogoCacheSeconds, senderPassedDmarc } from "./bimi";
 import { avatarColor } from "./avatar";
 import { RULE_ACTIONS, RULE_CATEGORIES, listRules, readAutopilotSettings, runAutopilotSweep, tidyInbox, undoAction, writeAutopilotSettings,
@@ -15,7 +13,6 @@ import { appName, ROUTING_HOSTS, workerName } from "./config";
 import { ensureManagedDomain, listManagedDomains } from "./domains";
 import { buildDeliverabilityReport } from "./deliverability";
 import { externalStatus, runExternalSync } from "./external";
-import { kgStatus, runKnowledgeGraphSync } from "./kg";
 import { performSend } from "./send";
 import { autopilotSpendToday } from "./usage";
 import type { ApiKeyRow, AttachmentRow, ContactRow, Env, IdentityRow, MessageRow, SendRecipientRow, SendRequestRow } from "./types";
@@ -77,30 +74,11 @@ const pushDeviceSchema = z.object({
   environment: z.enum(["development", "production"]),
   identities: z.array(emailAddress).min(1).max(100),
 });
-const agentSchema = z.object({
-  prompt: z.string().min(1).max(8_000),
-  identity: emailAddress.nullish().transform((value) => value ?? undefined),
-  maxSteps: z.number().int().min(1).max(16).default(8),
-  stream: z.boolean().default(false),
-  // Continue a saved chat (streaming only).
-  chatId: z.string().max(64).nullish().transform((value) => value ?? undefined),
-});
-const chatTurnSchema = z.object({
-  chatId: z.string().max(64).nullish().transform((value) => value ?? undefined),
-  text: z.string().trim().min(1).max(8_000),
-  identity: emailAddress.nullish().transform((value) => value ?? undefined),
-  maxSteps: z.number().int().min(1).max(16).default(10),
-});
-const chatDraftSchema = z.object({
-  from: emailAddress.optional(), to: z.array(emailAddress).max(20).optional(), cc: z.array(emailAddress).max(20).optional(),
-  subject: z.string().max(998).optional(), body: z.string().max(100_000).optional(),
-}).strict();
 const externalSyncSchema = z.object({
   identity: emailAddress.nullish().transform((value) => value ?? undefined),
   maxMessages: z.number().int().min(1).max(200).default(40),
 });
 
-api.use("*", securityHeaders);
 api.use("*", requireApiKey);
 api.use("*", auditRequest);
 api.use("*", bodyLimit({ maxSize: MAX_API_BODY_BYTES,
@@ -111,10 +89,15 @@ api.get("/whoami", requireScope("account:read"), (c) => c.json({ principal: c.ge
 api.get("/deliverability", requireScope("account:read"), requireScope("addresses:read"), async (c) => {
   const parsed = z.coerce.number().int().min(1).max(168).safeParse(c.req.query("hours") ?? "24");
   if (!parsed.success) return apiError(c, 400, "hours must be an integer between 1 and 168");
+  if (c.get("principal").allowedIdentities !== null) {
+    return apiError(c, 403, "Deliverability telemetry requires an unrestricted key");
+  }
+  if (!await consumeAdminLimit(c)) return apiError(c, 429, "Administrative rate limit exceeded");
   return c.json(await buildDeliverabilityReport(c.env, parsed.data));
 });
 
 api.get("/doctor", requireScope("account:read"), requireScope("addresses:read"), async (c) => {
+  if (!await consumeAdminLimit(c)) return apiError(c, 429, "Administrative rate limit exceeded");
   const startedAt = Date.now();
   const access = identityAccess(c, "address");
   const identitiesResult = await c.env.DB.prepare(`SELECT * FROM identities WHERE enabled = 1 AND kind = 'routed' AND ${access.sql} ORDER BY address`)
@@ -227,12 +210,14 @@ api.put("/push-devices", requireScope("mail:read"), async (c) => {
     AND address IN (${identities.map(() => "?").join(",")}) ORDER BY address`).bind(...identities).all<{ address: string }>();
   if (enabled.results.length !== identities.length) return apiError(c, 400, "Every push identity must be enabled");
   const id = await sha256(`${input.data.environment}:${input.data.deviceToken}`);
+  const nativeSessionHash = c.get("nativeSessionHash");
   await c.env.DB.prepare(`INSERT INTO push_devices
-    (id, key_id, device_token, environment, identities_json)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET key_id = excluded.key_id, identities_json = excluded.identities_json,
+    (id, key_id, native_session_hash, device_token, environment, identities_json)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET key_id = excluded.key_id, native_session_hash = excluded.native_session_hash,
+      identities_json = excluded.identities_json,
       disabled_at = NULL, failure_count = 0, updated_at = CURRENT_TIMESTAMP`)
-    .bind(id, c.get("principal").keyId, input.data.deviceToken, input.data.environment,
+    .bind(id, c.get("principal").keyId, nativeSessionHash, input.data.deviceToken, input.data.environment,
       JSON.stringify(enabled.results.map((row) => row.address))).run();
   return c.json({ registered: true, identities: enabled.results.map((row) => row.address) });
 });
@@ -241,8 +226,10 @@ api.delete("/push-devices", requireScope("mail:read"), async (c) => {
   const input = z.object({ deviceToken: z.string().regex(/^[a-f0-9]{64,400}$/),
     environment: z.enum(["development", "production"]) }).safeParse(await c.req.json().catch(() => null));
   if (!input.success) return apiError(c, 400, "Invalid push device removal", input.error.flatten());
-  await c.env.DB.prepare(`DELETE FROM push_devices WHERE key_id = ? AND device_token = ? AND environment = ?`)
-    .bind(c.get("principal").keyId, input.data.deviceToken, input.data.environment).run();
+  const nativeSessionHash = c.get("nativeSessionHash");
+  await c.env.DB.prepare(`DELETE FROM push_devices WHERE key_id = ? AND device_token = ? AND environment = ?
+    AND (? IS NULL OR native_session_hash IS NULL OR native_session_hash = ?)`)
+    .bind(c.get("principal").keyId, input.data.deviceToken, input.data.environment, nativeSessionHash, nativeSessionHash).run();
   return c.json({ removed: true });
 });
 
@@ -438,6 +425,7 @@ api.get("/messages/:id/sender-logo", requireScope("mail:read"), async (c) => {
 api.post("/logo-backfill", requireScope("mail:read"), async (c) => {
   const parsedCursor = z.string().max(128).safeParse(c.req.query("cursor") ?? "");
   if (!parsedCursor.success) return apiError(c, 400, "Invalid logo backfill cursor");
+  if (!await consumeAdminLimit(c)) return apiError(c, 429, "Logo backfill rate limit exceeded");
   const access = identityAccess(c, "identity_address");
   const result = await c.env.DB.prepare(`SELECT id, direction, sender_address, recipients_json, raw_key, sender_authenticated
     FROM messages WHERE status = 'ready' AND id > ? AND ${access.sql} ORDER BY id LIMIT 11`)
@@ -452,11 +440,9 @@ api.post("/logo-backfill", requireScope("mail:read"), async (c) => {
   }));
   const correspondents = [...new Map(eligible.filter((item): item is { address: string; domain: string } => item !== null)
     .map((item) => [item.address, item])).values()];
-  const byDomain = new Map<string, Array<{ address: string; domain: string }>>();
-  for (const item of correspondents) byDomain.set(item.domain, [...(byDomain.get(item.domain) ?? []), item]);
-  await Promise.all([...byDomain.values()].map(async (items) => {
-    for (const item of items) await senderLogo(c.env, item.domain, item.address).catch(() => null);
-  }));
+  for (const item of correspondents) {
+    await senderLogo(c.env, item.domain, item.address).catch(() => null);
+  }
   return c.json({ processed: batch.length, nextCursor: result.results.length > 10 ? batch.at(-1)?.id ?? null : null });
 });
 
@@ -492,8 +478,9 @@ api.get("/messages/:id/raw", requireScope("mail:read"), async (c) => {
   if (!row) return apiError(c, 404, "Message not found");
   const object = await c.env.MAIL.get(row.raw_key);
   if (!object) return apiError(c, 404, "Raw message not found");
+  const safeId = c.req.param("id").replaceAll(/[^A-Za-z0-9._-]/g, "_") || "message";
   return new Response(object.body, { headers: { "Content-Type": "message/rfc822",
-    "Content-Disposition": `attachment; filename="${c.req.param("id")}.eml"`,
+    "Content-Disposition": `attachment; filename="${safeId}.eml"`,
     "Cache-Control": "private, max-age=2592000, immutable", ETag: object.httpEtag } });
 });
 
@@ -519,9 +506,17 @@ api.get("/attachments/:id", requireScope("mail:read"), async (c) => {
   if (!attachment) return apiError(c, 404, "Attachment not found");
   const object = await c.env.MAIL.get(attachment.object_key);
   if (!object) return apiError(c, 404, "Attachment object not found");
-  const safeName = attachment.filename.replaceAll(/[\r\n"\\/]/g, "_");
-  return new Response(object.body, { headers: { "Content-Type": attachment.content_type, "Content-Length": String(attachment.size),
-    "Content-Disposition": `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`,
+  const cleanName = [...attachment.filename]
+    .map((ch) => {
+      const code = ch.codePointAt(0) ?? 0;
+      return code <= 0x1f || code === 0x7f || ch === '"' || ch === "\\" || ch === "/" ? "_" : ch;
+    })
+    .join("")
+    .trim() || "attachment";
+  const asciiName = cleanName.replaceAll(/[^\x20-\x7E]/g, "_") || "attachment";
+  const safeContentType = /^[\x20-\x7E]+$/.test(attachment.content_type) ? attachment.content_type : "application/octet-stream";
+  return new Response(object.body, { headers: { "Content-Type": safeContentType, "Content-Length": String(attachment.size),
+    "Content-Disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(cleanName)}`,
     "Cache-Control": "private, max-age=2592000, immutable", ETag: object.httpEtag, "X-Content-Type-Options": "nosniff" } });
 });
 
@@ -540,129 +535,8 @@ api.post("/messages/send", requireScope("mail:send"), async (c) => {
   return c.json(outcome.result.response, outcome.result.statusCode);
 });
 
-api.post("/agent", requireScope("mail:read"), async (c) => {
-  const input = agentSchema.safeParse(await c.req.json().catch(() => null));
-  if (!input.success) return apiError(c, 400, "Invalid agent request", input.error.flatten());
-  if (input.data.identity && !canAccessIdentity(c, input.data.identity)) {
-    return apiError(c, 403, "Agent identity is outside this key's access policy");
-  }
-  try {
-    if (input.data.stream) {
-      // A streamed run is a chat turn, so it shows up in the app's chat history.
-      if (input.data.chatId && requireOwner(c)) return apiError(c, 403, "Saved chats need a key with access to the owner's mailbox");
-      const response = await runChatTurn(c.env, c.get("principal"), { chatId: input.data.chatId, text: input.data.prompt,
-        identity: input.data.identity, maxSteps: input.data.maxSteps, fullAccess: requireOwner(c) === null },
-      (promise) => c.executionCtx.waitUntil(promise));
-      return response ?? apiError(c, 404, "Chat not found");
-    }
-    // The owner's agent sees every mailbox, as in his chats.
-    const principal = requireOwner(c) === null ? { ...c.get("principal"), allowedIdentities: null } : c.get("principal");
-    return c.json(await runMailAgent(c.env, principal, input.data));
-  } catch (error) {
-    console.error("Agent run failed", { requestId: c.get("requestId"), error: String(error).slice(0, 500) });
-    return apiError(c, 500, `Agent run failed: ${String(error).slice(0, 300)}`);
-  }
-});
-
-// Agent chats hold what the agent read in every mailbox: they are the owner's.
-api.get("/agent/chats", requireScope("mail:read"), async (c) => {
-  const denied = requireOwner(c);
-  if (denied) return denied;
-  return privateJson(c, { chats: await listChats(c.env, boundedLimit(c.req.query("limit"), 50, 200)) });
-});
-
-api.post("/agent/chats", requireScope("mail:read"), async (c) => {
-  const denied = requireOwner(c);
-  if (denied) return denied;
-  const input = chatTurnSchema.safeParse(await c.req.json().catch(() => null));
-  if (!input.success) return apiError(c, 400, "Invalid chat message", input.error.flatten());
-  if (input.data.identity && !canAccessIdentity(c, input.data.identity)) return apiError(c, 403, "Identity is outside this key's access policy");
-  try {
-    const response = await runChatTurn(c.env, c.get("principal"), { ...input.data, fullAccess: true },
-      (promise) => c.executionCtx.waitUntil(promise));
-    return response ?? apiError(c, 404, "Chat not found");
-  } catch (error) {
-    console.error("Agent chat turn failed", { requestId: c.get("requestId"), error: String(error).slice(0, 500) });
-    return apiError(c, 500, `Agent run failed: ${String(error).slice(0, 300)}`);
-  }
-});
-
-api.get("/agent/chats/:id", requireScope("mail:read"), async (c) => {
-  const denied = requireOwner(c);
-  if (denied) return denied;
-  const chat = await readChat(c.env, c.req.param("id"));
-  return chat ? privateJson(c, chat) : apiError(c, 404, "Chat not found");
-});
-
-api.patch("/agent/chats/:id", requireScope("mail:write"), async (c) => {
-  const denied = requireOwner(c);
-  if (denied) return denied;
-  const input = z.object({ title: z.string().trim().min(1).max(120) }).strict().safeParse(await c.req.json().catch(() => null));
-  if (!input.success) return apiError(c, 400, "Invalid chat", input.error.flatten());
-  const result = await c.env.DB.prepare("UPDATE agent_chats SET title = ? WHERE id = ?").bind(input.data.title, c.req.param("id")).run();
-  return result.meta.changes ? c.json({ updated: true }) : apiError(c, 404, "Chat not found");
-});
-
-api.delete("/agent/chats/:id", requireScope("mail:write"), async (c) => {
-  const denied = requireOwner(c);
-  if (denied) return denied;
-  const result = await c.env.DB.prepare("DELETE FROM agent_chats WHERE id = ?").bind(c.req.param("id")).run();
-  return result.meta.changes ? c.json({ deleted: true, id: c.req.param("id") }) : apiError(c, 404, "Chat not found");
-});
-
-api.patch("/agent/chats/:id/drafts/:draftId", requireScope("mail:write"), async (c) => {
-  const denied = requireOwner(c);
-  if (denied) return denied;
-  const input = chatDraftSchema.extend({ status: z.enum(["draft", "discarded"]).optional() }).strict()
-    .safeParse(await c.req.json().catch(() => null));
-  if (!input.success) return apiError(c, 400, "Invalid draft", input.error.flatten());
-  if (input.data.from && !canAccessIdentity(c, input.data.from)) return apiError(c, 403, "Sender identity is outside this key's access policy");
-  const row = await updateChatDraft(c.env, c.req.param("id"), c.req.param("draftId"), input.data);
-  return row ? c.json({ draft: publicChatDraft(row) }) : apiError(c, 404, "Draft not found");
-});
-
-// The only way an email the agent wrote leaves the mailbox: the owner's client
-// sends it, with his final edits, after he confirmed it. The agent has no tool for this.
-api.post("/agent/chats/:id/drafts/:draftId/send", requireScope("mail:send"), async (c) => {
-  const denied = requireOwner(c);
-  if (denied) return denied;
-  const input = chatDraftSchema.extend({ idempotencyKey: z.string().uuid() }).strict().safeParse(await c.req.json().catch(() => null));
-  if (!input.success) return apiError(c, 400, "Invalid send request", input.error.flatten());
-  const { idempotencyKey, ...edits } = input.data;
-  const current = await c.env.DB.prepare("SELECT * FROM agent_chat_drafts WHERE id = ? AND chat_id = ?")
-    .bind(c.req.param("draftId"), c.req.param("id")).first<ChatDraftRow>();
-  if (!current) return apiError(c, 404, "Draft not found");
-  if (current.status === "sent") return c.json({ sent: true, alreadySent: true, draft: publicChatDraft(current) });
-  const draft = Object.keys(edits).length ? await updateChatDraft(c.env, current.chat_id, current.id, edits) : current;
-  if (!draft) return apiError(c, 404, "Draft not found");
-  const to = JSON.parse(draft.to_json) as string[];
-  if (!to.length) return apiError(c, 400, "The email has no recipient");
-  if (!canAccessIdentity(c, draft.identity_address)) return apiError(c, 403, "Sender identity is outside this key's access policy");
-  const sendLimit = await c.env.SEND_RATE_LIMITER.limit({ key: c.get("principal").keyId });
-  if (!sendLimit.success) return apiError(c, 429, "Send rate limit exceeded");
-  const outcome = await performSend(c.env, {
-    keyId: c.get("principal").keyId, allowedIdentities: c.get("principal").allowedIdentities, idempotencyKey,
-    from: draft.identity_address, to, cc: JSON.parse(draft.cc_json) as string[], bcc: [], subject: draft.subject, text: draft.body,
-    replyToMessageId: draft.reply_to_message_id ?? undefined, attachments: [],
-  });
-  if (outcome.kind === "error") return apiError(c, outcome.status, outcome.message);
-  const response = outcome.result.response as { sent?: boolean; id?: string };
-  if (response.sent) await markChatDraftSent(c.env, draft.id, response.id ?? null);
-  const updated = await c.env.DB.prepare("SELECT * FROM agent_chat_drafts WHERE id = ?").bind(draft.id).first<ChatDraftRow>();
-  return c.json({ ...outcome.result.response, draft: updated ? publicChatDraft(updated) : null }, outcome.result.statusCode);
-});
-
 api.get("/external/status", requireScope("mail:read"), async (c) => {
   return c.json({ accounts: (await externalStatus(c.env)).filter((account) => canAccessIdentity(c, account.identity)) });
-});
-
-api.get("/kg/status", requireScope("mail:read"), async (c) => c.json(await kgStatus(c.env)));
-
-api.post("/kg/sync", requireScope("mail:write"), async (c) => {
-  const input = z.object({ maxMessages: z.number().int().min(1).max(100).default(25) })
-    .safeParse(await c.req.json().catch(() => ({})));
-  if (!input.success) return apiError(c, 400, "Invalid knowledge-graph sync request", input.error.flatten());
-  return c.json(await runKnowledgeGraphSync(c.env, { maxMessages: input.data.maxMessages, deadlineMs: 50_000 }));
 });
 
 // Autopilot: settings, rules and the action log. The autopilot is the owner's:
@@ -674,14 +548,20 @@ function requireOwner(c: Context<{ Bindings: Env; Variables: ApiVariables }>): R
 }
 
 api.get("/autopilot", requireScope("mail:read"), async (c) => {
+  const actionAccess = identityAccess(c, "m.identity_address");
+  const messageAccess = identityAccess(c, "identity_address");
   const [settings, spentTodayUsd, rules, recent, untriaged] = await Promise.all([
     readAutopilotSettings(c.env), autopilotSpendToday(c.env), listRules(c.env),
-    c.env.DB.prepare(`SELECT action, COUNT(*) AS count FROM autopilot_actions
-      WHERE created_at >= datetime('now', '-1 day') AND undone_at IS NULL GROUP BY action`).all<{ action: string; count: number }>(),
+    c.env.DB.prepare(`SELECT a.action, COUNT(*) AS count
+      FROM autopilot_actions a JOIN messages m ON m.id = a.message_id
+      WHERE a.created_at >= datetime('now', '-1 day') AND a.undone_at IS NULL AND ${actionAccess.sql}
+      GROUP BY a.action`).bind(...actionAccess.bindings).all<{ action: string; count: number }>(),
     c.env.DB.prepare(`SELECT COUNT(*) AS count FROM messages WHERE triaged_at IS NULL AND direction = 'inbound' AND status = 'ready'
-      AND received_at >= ?`).bind(new Date(Date.now() - 48 * 3_600_000).toISOString()).first<{ count: number }>(),
+      AND received_at >= ? AND ${messageAccess.sql}`).bind(new Date(Date.now() - 48 * 3_600_000).toISOString(), ...messageAccess.bindings)
+      .first<{ count: number }>(),
   ]);
-  return privateJson(c, { settings, spentTodayUsd: Math.round(spentTodayUsd * 1e6) / 1e6, rules: rules.map(publicRule),
+  const visibleRules = rules.filter((rule) => rule.identity_address === null || canAccessIdentity(c, rule.identity_address));
+  return privateJson(c, { settings, spentTodayUsd: Math.round(spentTodayUsd * 1e6) / 1e6, rules: visibleRules.map(publicRule),
     last24h: Object.fromEntries(recent.results.map((row) => [row.action, row.count])), untriagedLast48h: untriaged?.count ?? 0 });
 });
 
@@ -707,9 +587,13 @@ api.post("/autopilot/rules", requireScope("mail:write"), async (c) => {
   if (denied) return denied;
   const input = ruleInput.safeParse(await c.req.json().catch(() => null));
   if (!input.success) return apiError(c, 400, "Invalid rule", input.error.flatten());
+  const ruleIdentity = input.data.identity ?? null;
+  if (c.get("principal").allowedIdentities !== null && (ruleIdentity === null || !canAccessIdentity(c, ruleIdentity))) {
+    return apiError(c, 403, "Restricted keys may only create rules scoped to an accessible identity");
+  }
   const id = `rule-${crypto.randomUUID().slice(0, 8)}`;
   await c.env.DB.prepare(`INSERT INTO autopilot_rules (id, category, action, identity_address, sender_match, max_urgency, min_confidence, enabled)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, input.data.category, input.data.action, input.data.identity ?? null,
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, input.data.category, input.data.action, ruleIdentity,
     input.data.senderMatch ?? null, input.data.maxUrgency ?? 3, input.data.minConfidence ?? 0.8, input.data.enabled === false ? 0 : 1).run();
   const row = await c.env.DB.prepare("SELECT * FROM autopilot_rules WHERE id = ?").bind(id).first<RuleRow>();
   return c.json({ created: true, rule: publicRule(row!) }, 201);
@@ -720,6 +604,15 @@ api.patch("/autopilot/rules/:id", requireScope("mail:write"), async (c) => {
   if (denied) return denied;
   const input = ruleInput.partial().safeParse(await c.req.json().catch(() => null));
   if (!input.success) return apiError(c, 400, "Invalid rule", input.error.flatten());
+  if (c.get("principal").allowedIdentities !== null) {
+    const existing = await c.env.DB.prepare("SELECT identity_address FROM autopilot_rules WHERE id = ?")
+      .bind(c.req.param("id")).first<{ identity_address: string | null }>();
+    if (!existing) return apiError(c, 404, "Rule not found");
+    if (existing.identity_address === null || !canAccessIdentity(c, existing.identity_address)
+        || (input.data.identity !== undefined && (input.data.identity === null || !canAccessIdentity(c, input.data.identity)))) {
+      return apiError(c, 403, "Restricted keys may only modify rules scoped to an accessible identity");
+    }
+  }
   const columns: Array<[string, string | number | null]> = [];
   if (input.data.category !== undefined) columns.push(["category", input.data.category]);
   if (input.data.action !== undefined) columns.push(["action", input.data.action]);
@@ -739,6 +632,14 @@ api.patch("/autopilot/rules/:id", requireScope("mail:write"), async (c) => {
 api.delete("/autopilot/rules/:id", requireScope("mail:write"), async (c) => {
   const denied = requireOwner(c);
   if (denied) return denied;
+  if (c.get("principal").allowedIdentities !== null) {
+    const existing = await c.env.DB.prepare("SELECT identity_address FROM autopilot_rules WHERE id = ?")
+      .bind(c.req.param("id")).first<{ identity_address: string | null }>();
+    if (!existing) return apiError(c, 404, "Rule not found");
+    if (existing.identity_address === null || !canAccessIdentity(c, existing.identity_address)) {
+      return apiError(c, 403, "Restricted keys may only delete rules scoped to an accessible identity");
+    }
+  }
   const result = await c.env.DB.prepare("DELETE FROM autopilot_rules WHERE id = ?").bind(c.req.param("id")).run();
   if (!result.meta.changes) return apiError(c, 404, "Rule not found");
   return c.json({ deleted: true, id: c.req.param("id") });
@@ -776,6 +677,7 @@ api.post("/autopilot/actions/:id/undo", requireScope("mail:write"), async (c) =>
 });
 
 api.post("/autopilot/draft/:id", requireScope("mail:write"), async (c) => {
+  if (!await consumeAdminLimit(c)) return apiError(c, 429, "Autopilot draft rate limit exceeded");
   const access = identityAccess(c, "identity_address");
   const message = await c.env.DB.prepare(`SELECT id FROM messages WHERE id = ? AND direction = 'inbound' AND status = 'ready' AND ${access.sql}`)
     .bind(c.req.param("id"), ...access.bindings).first<{ id: string }>();
@@ -788,6 +690,7 @@ api.post("/autopilot/draft/:id", requireScope("mail:write"), async (c) => {
 api.post("/autopilot/brief", requireScope("mail:write"), async (c) => {
   const denied = requireOwner(c);
   if (denied) return denied;
+  if (!await consumeAdminLimit(c)) return apiError(c, 429, "Autopilot brief rate limit exceeded");
   const result = await writeDailyBrief(c.env);
   return result.written ? c.json(result, 201) : apiError(c, 409, result.reason ?? "No brief written");
 });
@@ -795,6 +698,7 @@ api.post("/autopilot/brief", requireScope("mail:write"), async (c) => {
 api.post("/autopilot/sweep", requireScope("mail:write"), async (c) => {
   const denied = requireOwner(c);
   if (denied) return denied;
+  if (!await consumeAdminLimit(c)) return apiError(c, 429, "Autopilot sweep rate limit exceeded");
   const report = await runAutopilotSweep(c.env, { maxMessages: 25, deadlineMs: 25_000 });
   return c.json({ ...report, tidied: await tidyInbox(c.env) });
 });
@@ -805,8 +709,10 @@ api.post("/external/sync", requireScope("mail:write"), async (c) => {
   if (input.data.identity && !canAccessIdentity(c, input.data.identity)) {
     return apiError(c, 403, "Sync identity is outside this key's access policy");
   }
+  if (!await consumeAdminLimit(c)) return apiError(c, 429, "External sync rate limit exceeded");
   return c.json(await runExternalSync(c.env, {
     identity: input.data.identity,
+    allowedIdentities: c.get("principal").allowedIdentities,
     maxMessages: input.data.maxMessages,
     deadlineMs: 50_000,
   }));
@@ -1006,6 +912,7 @@ api.post("/addresses", requireScope("addresses:write"), requireAdminConfirmation
 
 api.patch("/addresses/:address", requireScope("addresses:write"), requireAdminConfirmation, async (c) => {
   if (c.get("principal").allowedIdentities !== null) return apiError(c, 403, "Address administration requires an unrestricted administrator key");
+  if (!await consumeAdminLimit(c)) return apiError(c, 429, "Administrative rate limit exceeded");
   let decoded: string;
   try { decoded = decodeURIComponent(c.req.param("address")); } catch { return apiError(c, 400, "Invalid address encoding"); }
   const address = emailAddress.safeParse(decoded);
@@ -1029,7 +936,9 @@ api.delete("/addresses/:address", requireScope("addresses:write"), requireAdminC
   const row = await c.env.DB.prepare("SELECT * FROM identities WHERE address = ?").bind(address).first<IdentityRow>();
   if (!row) return apiError(c, 404, "Address not found");
   await c.env.DB.prepare("UPDATE identities SET enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE address = ?").bind(address).run();
-  await cloudflareRequest(c.env, row.zone_id, `/email/routing/rules/${row.routing_rule_id}`, "DELETE");
+  if (row.kind === "routed") {
+    await cloudflareRequest(c.env, row.zone_id, `/email/routing/rules/${row.routing_rule_id}`, "DELETE");
+  }
   await c.env.DB.prepare("DELETE FROM identities WHERE address = ?").bind(address).run();
   return c.json({ deleted: true, address });
 });
@@ -1037,7 +946,14 @@ api.delete("/addresses/:address", requireScope("addresses:write"), requireAdminC
 api.get("/keys", requireScope("keys:read"), async (c) => {
   const rows = await c.env.DB.prepare(`SELECT id, name, scopes_json, allowed_identities_json, expires_at, revoked_at, created_by, created_at, last_used_at
     FROM api_keys ORDER BY created_at DESC`).all<Omit<ApiKeyRow, "secret_hash">>();
-  return c.json({ keys: rows.results.map(publicKey) });
+  const principal = c.get("principal");
+  const visible = principal.allowedIdentities === null
+    ? rows.results
+    : rows.results.filter((row) => row.id === principal.keyId || (
+      row.allowed_identities_json !== null
+      && storedStringArray(row.allowed_identities_json).every((address) => principal.allowedIdentities!.includes(address.toLowerCase()))
+    ));
+  return c.json({ keys: visible.map(publicKey) });
 });
 
 api.post("/keys", requireScope("keys:write"), requireAdminConfirmation, async (c) => {
@@ -1105,8 +1021,13 @@ api.get("/audit", requireScope("audit:read"), async (c) => {
   const keyId = c.req.query("keyId"); const action = c.req.query("action");
   if (action && new TextEncoder().encode(action).byteLength > 50) return apiError(c, 400, "Action filter exceeds 50 bytes");
   if (keyId && keyId.length > 64) return apiError(c, 400, "keyId filter exceeds 64 characters");
+  const principal = c.get("principal");
+  if (principal.allowedIdentities !== null && keyId && keyId !== principal.keyId) {
+    return apiError(c, 403, "Restricted keys may only inspect their own audit events");
+  }
   const conditions = ["(created_at < ? OR (created_at = ? AND id < ?))"]; const bindings: unknown[] = [cursor.time, cursor.time, cursor.id];
-  if (keyId) { conditions.push("key_id = ?"); bindings.push(keyId); }
+  const effectiveKeyId = principal.allowedIdentities !== null ? principal.keyId : keyId;
+  if (effectiveKeyId) { conditions.push("key_id = ?"); bindings.push(effectiveKeyId); }
   if (action) { conditions.push("action LIKE ? ESCAPE '\\'"); bindings.push(`%${action.replaceAll(/[\\%_]/g, "\\$&")}%`); }
   const rows = await c.env.DB.prepare(`SELECT id, request_id, key_id, actor, action, resource, status, ip_hash, user_agent,
     metadata_json, created_at FROM audit_logs WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC, id DESC LIMIT ?`)
@@ -1372,6 +1293,7 @@ interface DnsAnswer { data: string; }
 async function resolveDns(name: string, type: "MX" | "TXT"): Promise<DnsAnswer[]> {
   const response = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=${type}`, {
     headers: { Accept: "application/dns-json" },
+    signal: AbortSignal.timeout(8_000),
   });
   if (!response.ok) throw new Error(`DNS lookup failed for ${name}: ${response.status}`);
   const payload = await response.json<{ Status: number; Answer?: DnsAnswer[] }>();
@@ -1383,6 +1305,7 @@ async function cloudflareRequest<T>(env: Env, zoneId: string, path: string, meth
   const response = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}${path}`, {
     method, headers: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`, ...(body ? { "Content-Type": "application/json" } : {}) },
     body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(10_000),
   });
   const payload = await response.json<{ success: boolean; result: T; errors?: Array<{ message: string }> }>();
   if (!response.ok || !payload.success) throw new Error(`Cloudflare API failed: ${payload.errors?.map((item) => item.message).join(", ") || response.status}`);

@@ -12,14 +12,13 @@ This guide walks through deploying your own **lmail** instance on Cloudflare Wor
 
 ## 1. Provision Cloudflare resources
 
-Create the D1 database, R2 bucket, Queues, and Vectorize index:
+Create the D1 database, R2 bucket, and Queues:
 
 ```bash
 npx wrangler d1 create lmail
 npx wrangler r2 bucket create lmail
 npx wrangler queues create lmail-inbound
 npx wrangler queues create lmail-inbound-dlq
-npx wrangler vectorize create lmail-messages --dimensions=1024 --metric=cosine
 ```
 
 ## 2. Configure `wrangler.jsonc`
@@ -34,7 +33,7 @@ Edit `wrangler.jsonc` with your own resource IDs, custom domains, and variables:
 | --- | --- | --- |
 | `APP_NAME` | Display name shown on the passkey authorization page | `lmail` |
 | `OWNER_EMAIL` | Primary owner address (used for owner-only routes and passkey enrollment) | `you@example.com` |
-| `OWNER_NAME` | Owner display name used in agent and reply-draft prompts | `Alex Rivera` |
+| `OWNER_NAME` | Owner display name used in reply-draft prompts | `Alex Rivera` |
 | `MAIL_HOST` | Public HTTPS hostname serving the Worker (required for WebAuthn RP ID) | `mail.example.com` |
 | `WORKER_NAME` | Deployed Worker name used when creating Email Routing rules | `lmail` |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID for deliverability and domain lookup APIs | `0123456789abcdef...` |
@@ -44,11 +43,10 @@ Edit `wrangler.jsonc` with your own resource IDs, custom domains, and variables:
 | `APNS_TOPIC` | Bundle identifier for Apple Push Notifications (only if using direct APNs) | `com.example.lmail` |
 | `OWNER_TIMEZONE` | IANA timezone for reply drafts and daily briefs | `UTC` |
 | `OWNER_PROFILE` | Optional short bio for autopilot triage context | `""` |
-| `OWNER_STYLE_GUIDE` | Optional writing-style instructions for reply drafts and agent | `""` |
+| `OWNER_STYLE_GUIDE` | Optional writing-style instructions for reply drafts | `""` |
 | `IDENTITY_SIGNATURES_JSON` | Optional JSON map of `address-or-domain -> signature` appended to reply drafts | `{}` |
 | `AGENT_SENDER_DOMAINS` | Optional comma-separated domains classified as `agent` mail in triage | `""` |
-| `AGENT_MODEL` | Workers AI model for the mailbox agent | `@cf/zai-org/glm-5.3-flash` |
-| `KG_MODEL` | Workers AI model for knowledge-graph extraction | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` |
+| `DRAFT_MODEL` | Active Workers AI instruct model for reply drafts and brief summaries | `@cf/meta/llama-3.1-8b-instruct-fp8` |
 
 After editing bindings in `wrangler.jsonc`, regenerate the TypeScript binding definitions:
 
@@ -111,11 +109,10 @@ Run the two printed `INSERT` statements against your remote D1 database with `np
 Once your administrator key is created:
 
 1. Point an Email Routing rule in Cloudflare for `you@example.com` to your deployed `lmail` Worker (and update `routing_rule_id` in `identities` if desired).
-2. Configure DNS deliverability records (DMARC, MTA-STS, TLS-RPT) either manually or via:
+2. Configure DNS deliverability records (DMARC, MTA-STS, TLS-RPT) either manually or via a scoped Cloudflare DNS API token:
 
 ```bash
-CF_API_EMAIL=you@example.com \
-CF_API_KEY=... \
+CLOUDFLARE_API_TOKEN=... \
 CF_ZONES_JSON='{"example.com":"<zone-id>"}' \
 ROOT_DOMAIN=example.com \
 DMARC_REPORT_ADDRESS=dmarc@example.com \
@@ -135,7 +132,11 @@ lmail doctor
 
 ```js
 const token = "lm_live_...";
-const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+const headers = {
+  Authorization: `Bearer ${token}`,
+  "Content-Type": "application/json",
+  "X-Admin-Confirmation": "user-approved",
+};
 const { challengeId, options } = await fetch("/auth/passkeys/register/options", { method: "POST", headers }).then((r) => r.json());
 const cred = await navigator.credentials.create({ publicKey: PublicKeyCredential.parseCreationOptionsFromJSON(options) });
 await fetch("/auth/passkeys/register/verify", {

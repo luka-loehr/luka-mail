@@ -74,7 +74,7 @@ describe("input validation", () => {
   it("answers 400 for bodies that are not JSON or do not match the schema", async () => {
     const headers = await key(ALL_MAIL, [OWNER]);
     for (const [method, path] of [["POST", "/v1/messages/send"], ["PUT", "/v1/drafts"], ["POST", "/v1/contacts"],
-      ["PATCH", "/v1/messages/some-id"], ["PUT", "/v1/push-devices"], ["POST", "/v1/agent"]] as const) {
+      ["PATCH", "/v1/messages/some-id"], ["PUT", "/v1/push-devices"]] as const) {
       const notJson = await call(path, { method, headers, body: "{not json" });
       expect(notJson.status, `${method} ${path} not JSON`).toBe(400);
       expect(await notJson.json()).toMatchObject({ code: "invalid_request", retryable: false, requestId: expect.any(String) });
@@ -176,8 +176,7 @@ describe("identity isolation", () => {
   it("keeps owner-only surfaces away from keys without the owner's mailbox", async () => {
     // The test owner is owner@example.com, so a key for external@ is not the owner's.
     const headers = await key(ALL_MAIL, [EXTERNAL]);
-    for (const [method, path, body] of [["GET", "/v1/agent/chats", undefined], ["GET", "/v1/agent/chats/x", undefined],
-      ["DELETE", "/v1/agent/chats/x", undefined], ["PATCH", "/v1/autopilot", { enabled: false }],
+    for (const [method, path, body] of [["PATCH", "/v1/autopilot", { enabled: false }],
       ["POST", "/v1/autopilot/rules", { category: "newsletter", action: "archive" }], ["DELETE", "/v1/autopilot/rules/x", undefined],
       ["POST", "/v1/autopilot/brief", undefined], ["POST", "/v1/autopilot/sweep", undefined]] as const) {
       const response = await call(path, { method, headers, ...(body ? { body: JSON.stringify(body) } : {}) });

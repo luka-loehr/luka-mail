@@ -51,6 +51,19 @@ enum MailAPIError: LocalizedError, Equatable {
     }
 }
 
+final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    static let shared = NoRedirectDelegate()
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest
+    ) async -> URLRequest? {
+        nil
+    }
+}
+
 actor APIClient {
     private let configuration: APIConfiguration
     private let session: URLSession
@@ -70,7 +83,7 @@ actor APIClient {
             config.requestCachePolicy = .useProtocolCachePolicy
             config.httpMaximumConnectionsPerHost = 8
             config.httpAdditionalHeaders = ["Accept": "application/json"]
-            self.session = URLSession(configuration: config)
+            self.session = URLSession(configuration: config, delegate: NoRedirectDelegate.shared, delegateQueue: nil)
         }
     }
 
@@ -113,6 +126,10 @@ actor APIClient {
     func registerPushDevice(token: String, environment: String, identities: [String]) async throws {
         let _: PushDeviceResponse = try await json("v1/push-devices", method: "PUT",
             body: PushDeviceRequest(deviceToken: token, environment: environment, identities: identities))
+    }
+    func unregisterPushDevice(token: String, environment: String) async throws {
+        let _: PushDeviceRemovalResponse = try await json("v1/push-devices", method: "DELETE",
+            body: PushDeviceRemovalRequest(deviceToken: token, environment: environment))
     }
     func identities() async throws -> [MailIdentity] {
         let response: IdentityResponse = try await json("v1/addresses")
@@ -182,53 +199,6 @@ actor APIClient {
     func backfillSenderLogos(cursor: String?) async throws -> LogoBackfillPage {
         let query = cursor.map { [URLQueryItem(name: "cursor", value: $0)] } ?? []
         return try await json("v1/logo-backfill", query: query, method: "POST")
-    }
-
-    // MARK: Agent chats
-
-    func agentChats(limit: Int = 100) async throws -> [AgentChatSummary] {
-        let response: AgentChatList = try await json("v1/agent/chats", query: [URLQueryItem(name: "limit", value: String(limit))])
-        return response.chats
-    }
-    func agentChat(id: String) async throws -> AgentChatDetail { try await json("v1/agent/chats/\(encoded(id))") }
-    func deleteAgentChat(id: String) async throws {
-        let _: AgentChatDeleted = try await json("v1/agent/chats/\(encoded(id))", method: "DELETE")
-    }
-    func updateAgentDraft(chatID: String, draftID: String, patch: AgentDraftPatch) async throws -> AgentDraft {
-        let response: AgentDraftResponse = try await json("v1/agent/chats/\(encoded(chatID))/drafts/\(encoded(draftID))",
-                                                          method: "PATCH", body: patch)
-        return response.draft
-    }
-    func sendAgentDraft(chatID: String, draftID: String, request: AgentDraftSendRequest) async throws -> AgentDraftSendResponse {
-        var urlRequest = try makeRequest("v1/agent/chats/\(encoded(chatID))/drafts/\(encoded(draftID))/send", method: "POST",
-                                         body: try encoder.encode(request))
-        urlRequest.timeoutInterval = 60
-        return try await decode(urlRequest)
-    }
-
-    /// Runs one chat turn and hands every streamed event to `onEvent` as it arrives.
-    func streamAgentTurn(_ turn: AgentTurnRequest, onEvent: @Sendable (AgentStreamEvent) async -> Void) async throws {
-        var request = try makeRequest("v1/agent/chats", method: "POST", body: try encoder.encode(turn))
-        request.setValue("application/x-ndjson", forHTTPHeaderField: "Accept")
-        request.timeoutInterval = 330
-        // Agent turns run for minutes; the mailbox session gives up after 45 seconds.
-        let configuration = session.configuration
-        configuration.timeoutIntervalForRequest = 90
-        configuration.timeoutIntervalForResource = 330
-        let streamingSession = URLSession(configuration: configuration)
-        defer { streamingSession.finishTasksAndInvalidate() }
-        let (bytes, response) = try await streamingSession.bytes(for: request)
-        guard let http = response as? HTTPURLResponse else { throw MailAPIError.invalidResponse(request.url?.path) }
-        guard (200..<300).contains(http.statusCode) else {
-            var payload = Data()
-            for try await byte in bytes { payload.append(byte) }
-            try validate(response, payload: payload)
-            return
-        }
-        for try await line in bytes.lines {
-            try Task.checkCancellation()
-            if let event = AgentStreamEvent.decode(line) { await onEvent(event) }
-        }
     }
 
     private func encoded(_ component: String) -> String {

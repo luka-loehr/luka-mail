@@ -1,5 +1,5 @@
 import PostalMime, { type Address, type Attachment, type Email } from "postal-mime";
-import { senderPassedDmarc } from "./bimi";
+import { senderPassedDmarc, senderPassedMailAuth } from "./bimi";
 import { sha256, stableId } from "./crypto";
 import { actionLogStatements, enqueueDraft, planArrival, relatedStatements, triageAssignments, type MessageState } from "./autopilot";
 import { enqueuePushNotification } from "./push";
@@ -69,10 +69,11 @@ export async function acceptInbound(message: ForwardableEmailMessage, env: Env):
     await env.DB.prepare("UPDATE messages SET status = 'pending', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(id).run();
   }
   await env.MAIL.put(rawKey, raw, { httpMetadata: { contentType: "message/rfc822" } });
-  await env.MAIL_QUEUE.send({ id, rawKey, envelopeFrom: message.from, envelopeTo: message.to, receivedAt, size: raw.byteLength });
+  await env.MAIL_QUEUE.send({ id, rawKey, envelopeFrom: message.from, envelopeTo: identity.address, receivedAt, size: raw.byteLength });
 }
 
 export async function processInbound(job: InboundJob, env: Env): Promise<void> {
+  const identityAddress = job.envelopeTo.toLowerCase();
   const current = await env.DB.prepare("SELECT status, spam, folder, unread, starred FROM messages WHERE id = ?").bind(job.id)
     .first<{ status: string; spam: number; folder: MessageState["folder"]; unread: number; starred: number }>();
   if (!current) throw new Error(`Message ${job.id} is missing`);
@@ -87,9 +88,9 @@ export async function processInbound(job: InboundJob, env: Env): Promise<void> {
   const parsed = await new PostalMime().parse(raw);
   const sender = addressOrEnvelope(parsed, job.envelopeFrom);
   const senderDomain = sender.address.split("@").at(-1)?.toLowerCase() ?? "";
-  const senderAuthenticated = senderDomain && senderPassedDmarc(
-    parsed.headers.filter((header) => header.key === "authentication-results").map((header) => header.value), senderDomain,
-  );
+  const authHeaders = parsed.headers.filter((header) => header.key === "authentication-results").map((header) => header.value);
+  const senderAuthenticated = Boolean(senderDomain && senderPassedDmarc(authHeaders, senderDomain));
+  const senderMailAuthenticated = Boolean(senderDomain && senderPassedMailAuth(authHeaders, senderDomain, job.envelopeFrom));
   const recipients = normalizeAddresses(parsed.to);
   const cc = normalizeAddresses(parsed.cc);
   const textKey = parsed.text ? `body/${job.id}.txt` : null;
@@ -102,11 +103,12 @@ export async function processInbound(job: InboundJob, env: Env): Promise<void> {
   const parsedMessageId = cleanHeader(parsed.messageId, 998) || null;
   const parsedInReplyTo = cleanHeader(parsed.inReplyTo, 998) || null;
   const messageIdCollision = parsedMessageId
-    ? await env.DB.prepare("SELECT id FROM messages WHERE message_id = ? AND id != ? LIMIT 1").bind(parsedMessageId, job.id).first()
+    ? await env.DB.prepare("SELECT id FROM messages WHERE identity_address = ? AND message_id = ? AND id != ? LIMIT 1")
+      .bind(identityAddress, parsedMessageId, job.id).first()
     : null;
   const storedMessageId = messageIdCollision ? null : parsedMessageId;
   const threadId = parsedInReplyTo
-    ? await findThreadForReply(env, parsedInReplyTo, job.envelopeTo, storedMessageId ?? job.id)
+    ? await findThreadForReply(env, parsedInReplyTo, identityAddress, storedMessageId ?? job.id)
     : await stableId(storedMessageId ?? job.id);
   const receivedAt = parsed.date && !Number.isNaN(new Date(parsed.date).valueOf()) ? new Date(parsed.date).toISOString() : job.receivedAt;
 
@@ -117,14 +119,14 @@ export async function processInbound(job: InboundJob, env: Env): Promise<void> {
   const senderName = cleanHeader(sender.name, 320);
   const bodyPreview = preview(parsed.text);
   const before: MessageState = { folder: current.folder, unread: current.unread, starred: current.starred, spam: 0,
-    senderAddress, identityAddress: job.envelopeTo };
-  const trusted = await isTrustedSender(env, senderAddress);
+    senderAddress, identityAddress };
+  const trusted = senderMailAuthenticated && await isTrustedSender(env, senderAddress, identityAddress);
   // A triage outage never holds up delivery: the message lands untriaged and
   // the cron sweep classifies it later.
   const plan = await planArrival(env, {
-    messageId: job.id, senderName, senderAddress, recipients: recipients.map((recipient) => recipient.address).join(", ") || job.envelopeTo,
-    subject, receivedAt, text: parsed.text ?? bodyPreview, identityAddress: job.envelopeTo,
-  }, before, trusted, { id: job.id, subject, senderAddress, identityAddress: job.envelopeTo, receivedAt }).catch((error: unknown) => {
+    messageId: job.id, senderName, senderAddress, recipients: recipients.map((recipient) => recipient.address).join(", ") || identityAddress,
+    subject, receivedAt, text: parsed.text ?? bodyPreview, identityAddress,
+  }, before, trusted, { id: job.id, subject, senderAddress, identityAddress, receivedAt, senderAuthenticated: senderMailAuthenticated }).catch((error: unknown) => {
     console.error(JSON.stringify({ event: "autopilot-arrival-failed", id: job.id, error: String(error).slice(0, 300) }));
     return null;
   });
@@ -139,9 +141,9 @@ export async function processInbound(job: InboundJob, env: Env): Promise<void> {
     folder = ?, unread = ?, starred = ?, spam = ?, spam_model = ?, spam_checked_at = ?, status = 'ready', updated_at = CURRENT_TIMESTAMP
     WHERE id = ?`)
     .bind(...assignments.bindings, threadId, storedMessageId, parsedInReplyTo, subject, senderName, senderAddress,
-      JSON.stringify(recipients.length ? recipients : [{ address: job.envelopeTo }]), JSON.stringify(cc), bodyPreview,
+      JSON.stringify(recipients.length ? recipients : [{ address: identityAddress }]), JSON.stringify(cc), bodyPreview,
       textKey, htmlKey, receivedAt, parsed.attachments.length ? 1 : 0, parsed.attachments.length, storedAttachments.length,
-      senderAuthenticated ? 1 : 0, decision.folder, decision.unread, decision.starred, decision.spam,
+      (senderAuthenticated || senderMailAuthenticated) ? 1 : 0, decision.folder, decision.unread, decision.starred, decision.spam,
       plan?.triage.model ?? null, plan ? new Date().toISOString() : null, job.id);
   await env.DB.batch([
     env.DB.prepare("DELETE FROM attachments WHERE message_id = ?").bind(job.id),

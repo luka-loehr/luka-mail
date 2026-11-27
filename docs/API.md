@@ -42,6 +42,7 @@ List reads return `ETag`; send `If-None-Match` to get `304`. Cursors (`nextCurso
 | Route | Purpose |
 | --- | --- |
 | `GET /health` | `{ ok, service, mode, version }` |
+| `GET /openapi.json` | Canonical OpenAPI 3.1.0 specification |
 | `GET /` | Service description |
 | `GET /.well-known/mta-sts.txt` on `mta-sts.*` hosts | MTA-STS policy; these hosts serve nothing else |
 
@@ -100,21 +101,7 @@ List reads return `ETag`; send `If-None-Match` to get `304`. Cursors (`nextCurso
 | `PATCH /v1/contacts/:address` | `mail:write` | `{ identity, displayName }` |
 | `DELETE /v1/contacts/:address?identity=` | `mail:write` | |
 
-## `/v1`: agent
-
-The agent has mailbox tools only and no send tool. Saved chats hold what it read in every mailbox, so they are owner-only.
-
-| Route | Scope | Notes |
-| --- | --- | --- |
-| `POST /v1/agent` | `mail:read` | `{ prompt (≤ 8000), identity?, maxSteps 1..16, stream?, chatId? }`; `stream: true` is a saved chat turn (NDJSON, `application/x-ndjson`) |
-| `GET /v1/agent/chats`, `GET /v1/agent/chats/:id` | `mail:read`, owner | |
-| `POST /v1/agent/chats` | `mail:read`, owner | `{ chatId?, text, identity?, maxSteps? }` |
-| `PATCH /v1/agent/chats/:id` | `mail:write`, owner | `{ title }` |
-| `DELETE /v1/agent/chats/:id` | `mail:write`, owner | |
-| `PATCH /v1/agent/chats/:id/drafts/:draftId` | `mail:write`, owner | `{ from?, to?, cc?, subject?, body?, status?: draft\|discarded }` |
-| `POST /v1/agent/chats/:id/drafts/:draftId/send` | `mail:send`, owner | `{ idempotencyKey, …final edits }`: the only way an agent-written mail leaves |
-
-## `/v1`: autopilot, external accounts, knowledge graph
+## `/v1`: autopilot and external accounts
 
 | Route | Scope | Notes |
 | --- | --- | --- |
@@ -127,8 +114,6 @@ The agent has mailbox tools only and no send tool. Saved chats hold what it read
 | `POST /v1/autopilot/brief`, `POST /v1/autopilot/sweep` | `mail:write`, owner | Write the brief now / triage what has no verdict |
 | `GET /v1/external/status` | `mail:read` | IMAP replication state of the external accounts the key can access |
 | `POST /v1/external/sync` | `mail:write` | `{ identity?, maxMessages? 1..200 }` |
-| `GET /v1/kg/status` | `mail:read` | Coverage counters |
-| `POST /v1/kg/sync` | `mail:write` | `{ maxMessages? 1..100 }` |
 
 ## `/v1`: administration
 

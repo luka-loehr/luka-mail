@@ -50,7 +50,10 @@ describe("native passkey authorization contract", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toContain("text/html");
-    expect(response.headers.get("Content-Security-Policy")).toContain("script-src 'self' 'sha256-");
+    const csp = response.headers.get("Content-Security-Policy") ?? "";
+    const nonceMatch = csp.match(/script-src 'self' 'nonce-([A-Za-z0-9_-]+)'/);
+    expect(nonceMatch).not.toBeNull();
+    expect(html).toContain(`<script nonce="${nonceMatch![1]}">`);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(html).toContain("Authorize lmail Test");
     expect(html).toContain("navigator.credentials.get");

@@ -7,7 +7,7 @@
 [![Swift](https://img.shields.io/badge/Apple-iOS%20%26%20macOS-111111?style=flat-square)](./ios)
 [![License](https://img.shields.io/badge/License-Apache--2.0-22c55e?style=flat-square)](./LICENSE)
 
-**lmail** is a self-hosted email system built on Cloudflare Workers, D1, R2, Queues, Vectorize, and Workers AI, paired with native iPhone, iPad, and Mac apps and a Rust CLI. It replaces traditional mail servers and browser webmail with an authenticated API, passkey sign-in, and scoped agent access.
+**lmail** is a self-hosted email system built on Cloudflare Workers, D1, R2, Queues, and Workers AI, paired with native iPhone, iPad, and Mac apps and a Rust CLI. It replaces traditional mail servers and browser webmail with an OpenAPI 3.1-contracted HTTP API, passkey sign-in, and scoped CLI access.
 
 ---
 
@@ -16,10 +16,10 @@
 - **Cloudflare data plane** — Routes, stores, indexes, and sends mail using Email Routing, Queues, D1, R2, and Email Sending with no origin server.
 - **Native Apple clients** — SwiftUI iPhone, iPad, and Mac apps with passkey + PKCE sign-in, offline cache, incremental delta sync, APNs push, and on-device demo mode.
 - **Scoped Rust CLI** — `lmail` provides human-readable and `--json` commands for reading, sending, watching, auditing, and administering mailboxes.
-- **Inbox autopilot** — Dual-model triage classifies incoming mail, filters spam, files routine notifications, drafts replies in your style, and writes a daily brief under a configurable spend cap.
-- **Mailbox agent & knowledge graph** — Workers AI tool loop backed by Vectorize embeddings and D1 entities/relations; drafts replies without ever sending automatically.
+- **Clef inbox autopilot** — Dual Cloudflare Clef decision models classify incoming mail, filter spam (~$0.37 per 1,000 messages, inside Cloudflare's free daily allowance), file routine notifications, draft replies in your style, and write a daily brief under a configurable spend cap.
+- **OpenAPI 3.1 contract** — Complete machine-readable schema (`openapi/openapi.json` and `GET /openapi.json`) enforced in CI against every Worker route and CLI call.
 - **External IMAP replication** — Mirrors existing IMAP/SMTP mailboxes into the same D1/R2 store and unified client experience.
-- **Hardened by default** — Scoped, identity-allowlisted API keys, 30-day revocable native sessions, idempotent sending, blocked remote images, and 180-day audit logs.
+- **Hardened & continuously audited** — Scoped, identity-allowlisted API keys, 30-day revocable native sessions, idempotent sending, blocked remote images, 180-day audit logs, and an in-repo `security-reviews/` register validated on every push.
 
 ---
 
@@ -45,10 +45,10 @@ See the [Self-Hosting Guide](./docs/SELF_HOSTING.md) for full Cloudflare setup, 
 
 ## Documentation
 
-- [Self-Hosting Guide](./docs/SELF_HOSTING.md) — Cloudflare Worker, D1, R2, Queues, Vectorize, Email Routing, secrets, and CLI setup
-- [HTTP API Reference](./docs/API.md) — Routes, scopes, rate limits, and error codes
+- [Self-Hosting Guide](./docs/SELF_HOSTING.md) — Cloudflare Worker, D1, R2, Queues, Email Routing, secrets, and CLI setup
+- [HTTP API Reference](./docs/API.md) and [OpenAPI 3.1 Spec](./openapi/openapi.json) — Routes, schemas, scopes, rate limits, and error codes
 - [App Store & Apple Apps Guide](./docs/APP_STORE.md) — Building iOS/macOS targets, signing overrides, demo mode, and push notifications
-- [Security Model](./SECURITY.md) — Trust boundaries, passkey/PKCE flow, and key scoping
+- [Security Model](./SECURITY.md) & [Security Reviews](./security-reviews/README.md) — Trust boundaries, passkey/PKCE flow, key scoping, and canonical audit register
 - [Privacy Policy](./docs/PRIVACY.md) and [Support](./docs/SUPPORT.md)
 
 ---

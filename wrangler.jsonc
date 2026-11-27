@@ -39,9 +39,6 @@
     { "name": "EMAIL" }
   ],
   "ai": { "binding": "AI" },
-  "vectorize": [
-    { "binding": "VECTORIZE", "index_name": "lmail-messages" }
-  ],
   "limits": { "cpu_ms": 300000 },
   "triggers": {
     "crons": ["*/15 * * * *"]
@@ -62,8 +59,7 @@
     "IDENTITY_SIGNATURES_JSON": "{}",
     "AGENT_SENDER_DOMAINS": "",
     "OWNER_TIMEZONE": "UTC",
-    "AGENT_MODEL": "@cf/zai-org/glm-5.3-flash",
-    "KG_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+    "DRAFT_MODEL": "@cf/meta/llama-3.1-8b-instruct-fp8"
   },
   "observability": {
     "enabled": true,

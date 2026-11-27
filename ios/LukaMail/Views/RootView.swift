@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum AppTab: String, Hashable {
-    case agent, inbox, starred, sent, search
+    case inbox, starred, sent, search
 }
 
 /// A destination pushed onto a tab's navigation stack.
@@ -16,15 +16,19 @@ struct OpenMailRouteAction {
     func callAsFunction(_ route: MailRoute) { handler(route) }
 }
 
+struct ShowSettingsAction {
+    let handler: () -> Void
+    func callAsFunction() { handler() }
+}
+
 extension EnvironmentValues {
     @Entry var openMailRoute = OpenMailRouteAction { _ in }
-    @Entry var showSettings: () -> Void = {}
+    @Entry var showSettings = ShowSettingsAction {}
 }
 
 struct RootView: View {
     @Environment(MailStore.self) private var store
-    // A new key: the app opens on the Agent tab, also for installs that remembered Inbox.
-    @SceneStorage("selectedTab.v2") private var tab: AppTab = .agent
+    @SceneStorage("selectedTab.v3") private var tab: AppTab = .inbox
     @State private var inboxPath: [MailRoute] = []
     @State private var composeDraft: Draft?
 
@@ -66,10 +70,6 @@ struct RootView: View {
 
     private var tabs: some View {
         TabView(selection: $tab) {
-            Tab("Agent", systemImage: "sparkles", value: AppTab.agent) {
-                AgentTab()
-            }
-
             Tab("Inbox", systemImage: Mailbox.inbox.symbolName, value: AppTab.inbox) {
                 MailboxTab(mailbox: .inbox, path: $inboxPath)
             }
@@ -131,7 +131,7 @@ private struct MailboxTab: View {
                 .navigationDestination(for: MailRoute.self) { MailRouteDestination(route: $0) }
         }
         .environment(\.openMailRoute, OpenMailRouteAction { path.wrappedValue.append($0) })
-        .environment(\.showSettings, { showSettings = true })
+        .environment(\.showSettings, ShowSettingsAction { showSettings = true })
         .sheet(isPresented: $showSettings) { SettingsView() }
         .onAppear {
             guard mailbox == .inbox else { return }

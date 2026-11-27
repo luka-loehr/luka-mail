@@ -34,9 +34,31 @@ struct MailWebView: UIViewRepresentable {
         context.coordinator.contentHeight = $contentHeight
         context.coordinator.onLink = onLink
         webView.overrideUserInterfaceStyle = document.forcesLightAppearance ? .light : .unspecified
-        guard context.coordinator.loadedHTML != document.html else { return }
+        let needsReload = context.coordinator.loadedHTML != document.html
+            || context.coordinator.loadedAllowRemoteImages != document.allowRemoteImages
+        guard needsReload else { return }
         context.coordinator.loadedHTML = document.html
-        webView.loadHTMLString(document.html, baseURL: nil)
+        context.coordinator.loadedAllowRemoteImages = document.allowRemoteImages
+        let html = document.html
+        let allowRemote = document.allowRemoteImages
+        Task { @MainActor in
+            await Self.applyContentRules(to: webView, allowRemoteImages: allowRemote)
+            guard context.coordinator.loadedHTML == html else { return }
+            webView.loadHTMLString(html, baseURL: nil)
+        }
+    }
+
+    private static func applyContentRules(to webView: WKWebView, allowRemoteImages: Bool) async {
+        let controller = webView.configuration.userContentController
+        controller.removeAllContentRuleLists()
+        let identifier = allowRemoteImages ? "lm-https-only" : "lm-block-remote"
+        let source = MailHTMLDocument.contentBlockingRulesJSON(allowRemoteImages: allowRemoteImages)
+        if let ruleList = try? await WKContentRuleListStore.default().compileContentRuleList(
+            forIdentifier: identifier,
+            encodedContentRuleList: source
+        ) {
+            controller.add(ruleList)
+        }
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -46,6 +68,7 @@ struct MailWebView: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         var loadedHTML = ""
+        var loadedAllowRemoteImages: Bool?
         var contentHeight: Binding<CGFloat>?
         var onLink: (MailLinkAction) -> Void = { _ in }
 

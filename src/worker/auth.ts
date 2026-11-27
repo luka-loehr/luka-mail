@@ -13,6 +13,9 @@ export type ApiVariables = {
   principal: AuthPrincipal;
   requestId: string;
   authMethod: "api-key" | "passkey-session";
+  nativeSessionHash: string | null;
+  isDeviceKey: boolean;
+  cspNonce: string;
 };
 
 type ApiContext = { Bindings: Env; Variables: ApiVariables };
@@ -23,6 +26,7 @@ export const NATIVE_SESSION_SCOPES = ["account:read", "mail:read", "mail:write",
 type AuthenticatedPrincipal = {
   row: ApiKeyRow;
   authMethod: "api-key" | "passkey-session";
+  isDeviceKey?: boolean;
   nativeSessionHash?: string;
   nativeSessionLastSeenAt?: string;
 };
@@ -41,39 +45,27 @@ export type NativeSessionPolicy = {
 
 const ACTIVITY_WRITE_INTERVAL_MS = 5 * 60 * 1_000;
 
-export const securityHeaders: MiddlewareHandler<ApiContext> = async (c, next) => {
+export const securityHeaders: MiddlewareHandler<{ Bindings: Env; Variables: { cspNonce?: string } }> = async (c, next) => {
+  const nonce = randomToken(18);
+  c.set("cspNonce", nonce);
   await next();
-  const isHtml = c.res.headers.get("Content-Type")?.startsWith("text/html") ?? false;
-  if (isHtml) {
-    const scriptHashes = await inlineScriptHashes(c.res);
-    c.header("Content-Security-Policy", `default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; frame-src 'self' blob:; img-src 'self' data: blob:; object-src 'none'; script-src 'self'${scriptHashes.length ? ` ${scriptHashes.join(" ")}` : ""}; style-src 'self' 'unsafe-inline'`);
-  } else {
-    c.header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+  if (!c.res.headers.has("Content-Security-Policy")) {
+    const isHtml = c.res.headers.get("Content-Type")?.startsWith("text/html") ?? false;
+    if (isHtml) {
+      c.header("Content-Security-Policy", `default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; frame-src 'self' blob:; img-src 'self' data: blob:; object-src 'none'; script-src 'self' 'nonce-${nonce}'; style-src 'self' 'unsafe-inline'`);
+    } else {
+      c.header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+    }
   }
-  const isDynamic = c.req.path === "/health" || c.req.path.startsWith("/auth/") || c.req.path.startsWith("/v1/");
-  if ((isHtml || isDynamic) && !c.res.headers.has("Cache-Control")) c.header("Cache-Control", "no-store");
-  else if (!c.res.headers.has("Cache-Control")) c.header("Cache-Control", "public, max-age=31536000, immutable");
+  if (!c.res.headers.has("Cache-Control")) {
+    c.header("Cache-Control", "no-store");
+  }
   c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   c.header("Referrer-Policy", "no-referrer");
   c.header("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
   c.header("X-Content-Type-Options", "nosniff");
   c.header("X-Frame-Options", "DENY");
 };
-
-async function inlineScriptHashes(response: Response): Promise<string[]> {
-  const html = await response.clone().text();
-  const hashes = new Set<string>();
-  const encoder = new TextEncoder();
-  for (const match of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)) {
-    const source = match[1];
-    if (!source) continue;
-    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(source)));
-    let binary = "";
-    for (const byte of digest) binary += String.fromCharCode(byte);
-    hashes.add(`'sha256-${btoa(binary)}'`);
-  }
-  return [...hashes];
-}
 
 export const requireApiKey: MiddlewareHandler<ApiContext> = async (c, next) => {
   const requestId = crypto.randomUUID();
@@ -106,6 +98,8 @@ export const requireApiKey: MiddlewareHandler<ApiContext> = async (c, next) => {
   const scopes = safeScopes(row.scopes_json);
   c.set("principal", { keyId, name: row.name, scopes, allowedIdentities: safeIdentities(row.allowed_identities_json) });
   c.set("authMethod", authMethod);
+  c.set("nativeSessionHash", authenticated.nativeSessionHash ?? null);
+  c.set("isDeviceKey", Boolean(authenticated.isDeviceKey));
   const activityUpdates: D1PreparedStatement[] = [];
   if (activityTimestampIsStale(row.last_used_at)) {
     activityUpdates.push(c.env.DB.prepare("UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?").bind(keyId));
@@ -131,7 +125,7 @@ export async function authenticateBearer(env: Env, token: string): Promise<Authe
         : `device:${await sha256(secret)}`
       : await sha256(`${env.API_KEY_PEPPER}:${secret}`);
     if (!row || !await constantTimeEqual(actualHash, row.secret_hash) || !isActiveKey(row)) return null;
-    return { row, authMethod: "api-key" };
+    return { row, authMethod: "api-key", isDeviceKey: tokenKind === "device" };
   }
   return authenticateNativeSession(env, token);
 }
@@ -145,7 +139,9 @@ export async function authenticateNativeSession(env: Env, token: string): Promis
       (SELECT COALESCE(json_group_array(address), '[]') FROM
         (SELECT address FROM identities WHERE enabled = 1 ORDER BY address)) AS enabled_identities_json
     FROM native_sessions s JOIN api_keys k ON k.id = s.key_id
-    WHERE s.token_hash = ? AND s.expires_at > CURRENT_TIMESTAMP`).bind(tokenHash).first<NativeSessionAuthRow>();
+    WHERE s.token_hash = ? AND datetime(s.expires_at) > datetime('now')
+      AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR datetime(k.expires_at) > datetime('now'))`)
+    .bind(tokenHash).first<NativeSessionAuthRow>();
   if (!stored || !isActiveKey(stored)) return null;
   const policy = await constrainedNativeSessionPolicy(env, stored, {
     scopes: safeScopes(stored.session_scopes_json),
@@ -195,9 +191,17 @@ export async function constrainedNativeSessionPolicy(
 export async function authenticateWebSession(env: Env, token: string | null): Promise<AuthenticatedPrincipal | null> {
   if (!token || token.length < 32 || token.length > 128) return null;
   const tokenHash = await sha256(token);
-  const row = await env.DB.prepare(`SELECT k.* FROM web_sessions s JOIN api_keys k ON k.id = s.key_id
-    WHERE s.token_hash = ? AND s.expires_at > CURRENT_TIMESTAMP`).bind(tokenHash).first<ApiKeyRow>();
-  if (!row || !isActiveKey(row)) return null;
+  const stored = await env.DB.prepare(`SELECT k.* FROM web_sessions s JOIN api_keys k ON k.id = s.key_id
+    WHERE s.token_hash = ? AND datetime(s.expires_at) > datetime('now')
+      AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR datetime(k.expires_at) > datetime('now'))`)
+    .bind(tokenHash).first<ApiKeyRow>();
+  if (!stored || !isActiveKey(stored)) return null;
+  const policy = await constrainedNativeSessionPolicy(env, stored);
+  const row: ApiKeyRow = {
+    ...stored,
+    scopes_json: JSON.stringify(policy.scopes),
+    allowed_identities_json: JSON.stringify(policy.allowedIdentities),
+  };
   return { row, authMethod: "passkey-session" };
 }
 
@@ -314,7 +318,7 @@ function isSafeMethod(method: string): boolean {
   return method === "GET" || method === "HEAD" || method === "OPTIONS";
 }
 
-function isSameOrigin(request: Request): boolean {
+export function isSameOrigin(request: Request): boolean {
   const origin = request.headers.get("Origin");
   return origin !== null && origin === new URL(request.url).origin;
 }

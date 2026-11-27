@@ -224,6 +224,7 @@ export interface ArrivalMessage {
   senderAddress: string;
   identityAddress: string | null;
   receivedAt: string;
+  senderAuthenticated?: boolean;
 }
 
 /**
@@ -233,13 +234,15 @@ export interface ArrivalMessage {
  */
 export async function collapseRepeats(env: Env, message: ArrivalMessage, triage: Triage, decision: Decision):
   Promise<{ related: RelatedAction[]; quiet: boolean }> {
-  if (!REPEATING_CATEGORIES.has(triage.category) || decision.folder !== "inbox" || decision.spam) return { related: [], quiet: false };
+  if (!message.senderAuthenticated || !REPEATING_CATEGORIES.has(triage.category) || decision.folder !== "inbox" || decision.spam) {
+    return { related: [], quiet: false };
+  }
   const key = alertKey(message.subject);
   if (key.length < 4) return { related: [], quiet: false };
   const resolved = isResolution(message.subject);
   const rows = await env.DB.prepare(`SELECT id, subject, folder, unread, starred, spam FROM messages
     WHERE direction = 'inbound' AND status = 'ready' AND folder = 'inbox' AND spam = 0 AND id != ?
-      AND identity_address IS ? AND sender_address = ? AND received_at >= ? AND received_at <= ?
+      AND sender_authenticated = 1 AND identity_address IS ? AND sender_address = ? AND received_at >= ? AND received_at <= ?
     ORDER BY received_at DESC LIMIT 200`)
     .bind(message.id, message.identityAddress, message.senderAddress,
       new Date(Date.parse(message.receivedAt) - REPEAT_WINDOW_DAYS * 86_400_000).toISOString(), message.receivedAt)
@@ -288,7 +291,7 @@ export async function tidyInbox(env: Env): Promise<number> {
   const settings = await readAutopilotSettings(env);
   if (!settings.enabled) return 0;
   const rows = await env.DB.prepare(`SELECT id, subject, sender_address, identity_address, unread, starred FROM messages
-    WHERE direction = 'inbound' AND status = 'ready' AND folder = 'inbox' AND spam = 0
+    WHERE direction = 'inbound' AND status = 'ready' AND folder = 'inbox' AND spam = 0 AND sender_authenticated = 1
       AND triage_category IN ('notification', 'agent') AND received_at >= ?
     ORDER BY received_at DESC, id DESC`)
     .bind(new Date(Date.now() - REPEAT_WINDOW_DAYS * 86_400_000).toISOString()).all<TidyRow>();
@@ -364,6 +367,7 @@ interface SweepRow {
   text_key: string | null;
   received_at: string;
   identity_address: string | null;
+  sender_authenticated: number | null;
   trusted: number;
 }
 
@@ -381,9 +385,10 @@ export async function runAutopilotSweep(env: Env, options: { maxMessages: number
   const startedAt = Date.now();
   const settings = await readAutopilotSettings(env);
   const rows = await env.DB.prepare(`SELECT m.id, m.folder, m.unread, m.starred, m.spam, m.sender_name, m.sender_address,
-      m.recipients_json, m.subject, m.preview, m.text_key, m.received_at, m.identity_address,
-      (EXISTS (SELECT 1 FROM identities i WHERE i.address = m.sender_address)
-        OR EXISTS (SELECT 1 FROM contacts c WHERE c.address = m.sender_address)) AS trusted
+      m.recipients_json, m.subject, m.preview, m.text_key, m.received_at, m.identity_address, m.sender_authenticated,
+      (m.sender_authenticated = 1 AND (EXISTS (SELECT 1 FROM identities i WHERE i.address = m.sender_address)
+        OR EXISTS (SELECT 1 FROM contacts c WHERE c.address = m.sender_address
+          AND (m.identity_address IS NULL OR c.identity_address = m.identity_address)))) AS trusted
     FROM messages m
     WHERE m.triaged_at IS NULL AND m.direction = 'inbound' AND m.status = 'ready'
       AND m.received_at >= ? ORDER BY m.received_at DESC LIMIT ?`)
@@ -412,7 +417,8 @@ export async function runAutopilotSweep(env: Env, options: { maxMessages: number
       : { ...before, actions: [], draft: false };
     const { related } = settings.enabled && row.folder === "inbox"
       ? await collapseRepeats(env, { id: row.id, subject: row.subject, senderAddress: row.sender_address,
-        identityAddress: row.identity_address, receivedAt: row.received_at }, triage, decision)
+        identityAddress: row.identity_address, receivedAt: row.received_at,
+        senderAuthenticated: row.sender_authenticated === 1 }, triage, decision)
       : { related: [] };
     const assignments = triageAssignments(triage);
     const update = env.DB.prepare(`UPDATE messages SET ${assignments.sql} folder = ?, unread = ?, starred = ?, spam = ?,

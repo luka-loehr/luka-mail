@@ -24,14 +24,47 @@ export interface SenderLogoAsset {
   etag?: string;
 }
 
+function stripRfc5322Comments(value: string): string {
+  let result = value;
+  for (let pass = 0; pass < 8; pass += 1) {
+    const next = result.replaceAll(/\([^()]*\)/g, " ");
+    if (next === result) break;
+    result = next;
+  }
+  return result.replaceAll(/[()]/g, " ");
+}
+
 export function senderPassedDmarc(authenticationResults: string[], domain: string): boolean {
-  const normalizedDomain = domain.toLowerCase().replace(/^@/, "");
-  return authenticationResults.some((value) => {
-    const normalized = value.toLowerCase().replaceAll(/\s+/g, " ");
-    const fromMatch = normalized.match(/(?:^|[;\s])header\.from\s*=\s*([^;\s]+)/);
-    return /(?:^|[;\s])dmarc\s*=\s*pass(?:[;\s(]|$)/.test(normalized)
-      && fromMatch?.[1]?.replace(/\.$/, "") === normalizedDomain;
-  });
+  const normalizedDomain = domain.toLowerCase().replace(/^@/, "").replace(/\.$/, "");
+  const primary = authenticationResults[0];
+  if (!primary || !normalizedDomain) return false;
+  const normalized = stripRfc5322Comments(primary).toLowerCase().replaceAll(/\s+/g, " ");
+  const fromMatch = normalized.match(/(?:^|[;\s])header\.from\s*=\s*([^;\s]+)/);
+  const fromDomain = fromMatch?.[1]?.replace(/^@/, "").replace(/\.$/, "") ?? "";
+  return /(?:^|[;\s])dmarc\s*=\s*pass(?:[;\s]|$)/.test(normalized)
+    && fromDomain === normalizedDomain;
+}
+
+export function senderPassedMailAuth(authenticationResults: string[], domain: string, envelopeFrom?: string): boolean {
+  if (senderPassedDmarc(authenticationResults, domain)) return true;
+  const normalizedDomain = domain.toLowerCase().replace(/^@/, "").replace(/\.$/, "");
+  const primary = authenticationResults[0];
+  if (!primary || !normalizedDomain) return false;
+  const normalized = stripRfc5322Comments(primary).toLowerCase().replaceAll(/\s+/g, " ");
+  if (/(?:^|[;\s])dmarc\s*=\s*(?:fail|permerror)(?:[;\s]|$)/.test(normalized)) return false;
+
+  for (const clause of normalized.split(";").slice(1)) {
+    if (/\bdkim\s*=\s*pass\b/.test(clause)) {
+      const dkimDomain = clause.match(/\bheader\.[di]\s*=\s*(?:[^@\s;]*@)?([^;\s]+)/)?.[1]?.replace(/\.$/, "") ?? "";
+      if (dkimDomain === normalizedDomain || normalizedDomain.endsWith(`.${dkimDomain}`)) return true;
+    }
+    if (/\bspf\s*=\s*pass\b/.test(clause)) {
+      const spfMailFrom = clause.match(/\bsmtp\.mailfrom\s*=\s*([^;\s]+)/)?.[1] ?? "";
+      const spfDomain = (spfMailFrom.split("@").at(-1) || envelopeFrom?.split("@").at(-1) || "").toLowerCase().replace(/\.$/, "");
+      if (spfDomain === normalizedDomain || normalizedDomain.endsWith(`.${spfDomain}`)) return true;
+    }
+  }
+  return false;
 }
 
 export function authenticationResultsFromRawHeaders(raw: string): string[] {
@@ -45,7 +78,8 @@ export function authenticationResultsFromRawHeaders(raw: string): string[] {
   });
 }
 
-export function parseBimiRecord(records: string[]): { logo: URL; certificate: URL | null } | null {
+export function parseBimiRecord(records: string[], senderDomain?: string): { logo: URL; certificate: URL | null } | null {
+  const expectedDomain = senderDomain?.toLowerCase().replace(/\.$/, "");
   for (const record of records) {
     const tags = new Map(record.split(";").map((part) => part.trim()).filter(Boolean).map((part) => {
       const separator = part.indexOf("=");
@@ -54,7 +88,12 @@ export function parseBimiRecord(records: string[]): { logo: URL; certificate: UR
     if (tags.get("v")?.toUpperCase() !== "BIMI1") continue;
     const logo = safeHttpsURL(tags.get("l"));
     const certificate = safeHttpsURL(tags.get("a"));
-    if (logo) return { logo, certificate };
+    if (!logo) continue;
+    if (expectedDomain && !certificate) {
+      const logoHost = logo.hostname.toLowerCase();
+      if (logoHost !== expectedDomain && !logoHost.endsWith(`.${expectedDomain}`)) continue;
+    }
+    return { logo, certificate };
   }
   return null;
 }
@@ -82,7 +121,7 @@ export async function senderLogo(env: Env, requestedDomain: string, requestedAdd
   if (cached.state === "missing") return null;
 
   const records = await txtRecords(`default._bimi.${domain}`);
-  const record = parseBimiRecord(records);
+  const record = parseBimiRecord(records, domain);
   const discovered = await discoverDomainLogo(domain, record?.logo).catch(() => null);
   if (!discovered) { await saveMissing(env, domain); return null; }
   return saveFound(env, domain, discovered.source, discovered.asset);

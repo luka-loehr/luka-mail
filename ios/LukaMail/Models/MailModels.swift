@@ -70,6 +70,15 @@ struct PushDeviceResponse: Codable, Sendable {
     let identities: [String]
 }
 
+struct PushDeviceRemovalRequest: Encodable, Sendable {
+    let deviceToken: String
+    let environment: String
+}
+
+struct PushDeviceRemovalResponse: Codable, Sendable {
+    let removed: Bool
+}
+
 struct MailAddress: Codable, Hashable, Sendable {
     var name: String?
     var address: String
@@ -117,6 +126,7 @@ struct MailMessage: Codable, Identifiable, Hashable, Sendable {
     let storedAttachmentCount: Int?
     let attachmentsTruncated: Bool?
     let size: Int
+    var spam: Bool? = nil
 
     var displaySubject: String { subject.isEmpty ? "No Subject" : subject }
     var date: Date { MailDate.parse(receivedAt) ?? .distantPast }

@@ -3,22 +3,14 @@ import SwiftUI
 @main
 struct LukaMailApp: App {
     @UIApplicationDelegateAdaptor(LukaMailAppDelegate.self) private var appDelegate
-    @State private var store: MailStore
-    @State private var agent: AgentStore
+    @State private var store = MailStore()
     @State private var pushNotifications = PushNotificationCoordinator.shared
     @Environment(\.scenePhase) private var scenePhase
-
-    init() {
-        let store = MailStore()
-        _store = State(initialValue: store)
-        _agent = State(initialValue: AgentStore(mail: store))
-    }
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(store)
-                .environment(agent)
                 .task { await store.bootstrap() }
                 .task(id: "\(store.configured)-\(scenePhase)") {
                     guard store.configured, scenePhase == .active else { return }

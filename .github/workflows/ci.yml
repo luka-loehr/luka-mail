@@ -5,29 +5,39 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   worker:
-    name: Worker (types, lint, test, build)
+    name: Worker (OpenAPI, types, lint, test, dry-run)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts
+      - run: npm rebuild workerd esbuild
+      - run: npm audit --omit=dev --audit-level=high
+      - run: python3 security-reviews/scripts/check_review_system.py
       - run: npm run test:all
+      - name: Verify Worker bundle (no upload)
+        run: npx wrangler deploy --dry-run --outdir dist
 
   cli:
     name: CLI (fmt, clippy, test)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           components: rustfmt, clippy
       - run: cargo fmt --manifest-path cli/Cargo.toml --check

@@ -12,8 +12,9 @@ export async function enqueuePushNotification(env: Env, messageId: string): Prom
 
 export async function enqueuePendingPushNotifications(env: Env, limit = 25): Promise<number> {
   const rows = await env.DB.prepare(`SELECT message_id FROM push_notification_outbox
-    WHERE status = 'pending' OR (status = 'processing' AND locked_at < datetime('now', '-10 minutes'))
-    ORDER BY created_at LIMIT ?`).bind(limit).all<{ message_id: string }>();
+    WHERE (status = 'pending' OR (status = 'processing' AND locked_at < datetime('now', '-10 minutes')))
+      AND attempts < 10 AND created_at >= datetime('now', '-24 hours')
+    ORDER BY attempts ASC, created_at ASC LIMIT ?`).bind(limit).all<{ message_id: string }>();
   await Promise.all(rows.results.map((row) => enqueuePushNotification(env, row.message_id)));
   return rows.results.length;
 }
@@ -22,7 +23,7 @@ export async function deliverPushJob(env: Env, job: PushJob): Promise<void> {
   const claimed = await env.DB.prepare(`UPDATE push_notification_outbox
     SET status = 'processing', locked_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
     WHERE message_id = ? AND (status = 'pending' OR (status = 'processing' AND locked_at < datetime('now', '-10 minutes')))
-    RETURNING identity_address`).bind(job.messageId).first<{ identity_address: string }>();
+    RETURNING identity_address, attempts`).bind(job.messageId).first<{ identity_address: string; attempts: number }>();
   if (!claimed) return;
   try {
     const message = await env.DB.prepare(`SELECT id, thread_id, identity_address, subject, sender_name, sender_address
@@ -37,8 +38,12 @@ export async function deliverPushJob(env: Env, job: PushJob): Promise<void> {
     await sendNewMailPush(env, message);
     await env.DB.prepare("DELETE FROM push_notification_outbox WHERE message_id = ?").bind(job.messageId).run();
   } catch (error) {
-    await env.DB.prepare(`UPDATE push_notification_outbox SET status = 'pending', attempts = attempts + 1,
-      locked_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE message_id = ?`).bind(job.messageId).run();
+    if (claimed.attempts + 1 >= 10) {
+      await env.DB.prepare("DELETE FROM push_notification_outbox WHERE message_id = ?").bind(job.messageId).run();
+    } else {
+      await env.DB.prepare(`UPDATE push_notification_outbox SET status = 'pending', attempts = attempts + 1,
+        locked_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE message_id = ?`).bind(job.messageId).run();
+    }
     throw error;
   }
 }
@@ -46,10 +51,24 @@ export async function deliverPushJob(env: Env, job: PushJob): Promise<void> {
 async function sendNewMailPush(env: Env, message: PushMessage): Promise<void> {
   const devices = await env.DB.prepare(`SELECT pd.id, pd.device_token, pd.environment FROM push_devices pd
     JOIN api_keys k ON k.id = pd.key_id
-    WHERE pd.disabled_at IS NULL AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > CURRENT_TIMESTAMP)
-    AND EXISTS (
-      SELECT 1 FROM json_each(pd.identities_json) WHERE value = ?
-    ) ORDER BY pd.id`).bind(message.identity_address).all<PushDeviceRow>();
+    WHERE pd.disabled_at IS NULL AND k.revoked_at IS NULL
+      AND (k.expires_at IS NULL OR datetime(k.expires_at) > datetime('now'))
+      AND (pd.native_session_hash IS NULL OR EXISTS (
+        SELECT 1 FROM native_sessions ns
+        WHERE ns.token_hash = pd.native_session_hash AND datetime(ns.expires_at) > datetime('now')
+      ))
+      AND EXISTS (
+        SELECT 1 FROM json_each(k.scopes_json) WHERE value IN ('mail:read', 'mail:*', '*')
+      )
+      AND (k.allowed_identities_json IS NULL OR EXISTS (
+        SELECT 1 FROM json_each(k.allowed_identities_json) WHERE lower(value) = lower(?)
+      ))
+      AND EXISTS (
+        SELECT 1 FROM identities i WHERE i.address = ? AND i.enabled = 1
+      )
+      AND EXISTS (
+        SELECT 1 FROM json_each(pd.identities_json) WHERE lower(value) = lower(?)
+      ) ORDER BY pd.id`).bind(message.identity_address, message.identity_address, message.identity_address).all<PushDeviceRow>();
   if (devices.results.length === 0) return;
   const authorization = `bearer ${await apnsProviderToken(env)}`;
   const payload = JSON.stringify(newMailPayload(message));

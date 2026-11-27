@@ -30,6 +30,13 @@ export function ownerName(env: Partial<Pick<Env, "OWNER_NAME">>): string {
   return (env.OWNER_NAME ?? "").trim() || "Owner";
 }
 
+export const DEFAULT_DRAFT_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8";
+
+export function draftModel(env: Partial<Pick<Env, "DRAFT_MODEL">>): string {
+  const configured = (env.DRAFT_MODEL ?? "").trim();
+  return configured || DEFAULT_DRAFT_MODEL;
+}
+
 export function ownerTimezone(env: Partial<Pick<Env, "OWNER_TIMEZONE">>): string {
   const tz = (env.OWNER_TIMEZONE ?? "").trim();
   return tz || "UTC";

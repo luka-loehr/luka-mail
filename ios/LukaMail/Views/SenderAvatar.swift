@@ -105,6 +105,13 @@ final class SenderLogoImageCache {
         images.totalCostLimit = 24 * 1_024 * 1_024
     }
 
+    func clear() {
+        requests.values.forEach { $0.cancel() }
+        requests = [:]
+        addressAliases = [:]
+        images.removeAllObjects()
+    }
+
     func cachedImage(address: String, cacheVersion: Int, etag: String?, pixelSize: Int) -> UIImage? {
         let assetID = Self.normalizedETag(etag)
             ?? addressAliases[Self.aliasKey(address: address, cacheVersion: cacheVersion)]
@@ -264,6 +271,10 @@ private final class SVGLogoRenderer: NSObject, WKNavigationDelegate {
         }
         current?.navigation = navigation
         current?.timeout = timeout
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
+        action.request.url?.scheme == "about" ? .allow : .cancel
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

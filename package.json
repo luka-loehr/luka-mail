@@ -2,7 +2,7 @@
   "name": "lmail",
   "version": "0.1.0",
   "private": true,
-  "description": "Self-hosted personal email infrastructure on Cloudflare Workers with AI triage, knowledge graph, and native clients",
+  "description": "Self-hosted Cloudflare-native email system with Clef AI triage, OpenAPI 3.1 contract, native Apple apps, and Rust CLI",
   "license": "Apache-2.0",
   "repository": "github:luka-loehr/luka-mail",
   "type": "module",
@@ -11,9 +11,11 @@
     "build": "tsc -b",
     "check": "tsc -b --pretty false",
     "lint": "eslint .",
+    "openapi:generate": "node scripts/generate-openapi.mjs",
+    "openapi:check": "node scripts/check-openapi.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:all": "npm run cf:types:check && npm run check && npm run lint && npm test && npm run build",
+    "test:all": "npm run cf:types:check && npm run openapi:check && npm run check && npm run lint && npm test && npm run build",
     "db:migrate:local": "wrangler d1 migrations apply lmail --local",
     "db:migrate:remote": "wrangler d1 migrations apply lmail --remote",
     "deploy": "npm run build && wrangler deploy --keep-vars",
@@ -22,11 +24,9 @@
     "cf:types:check": "wrangler types --include-runtime false --check src/worker/worker-configuration.d.ts"
   },
   "dependencies": {
-    "@simplewebauthn/server": "^13.3.2",
-    "ai": "^7.0.68",
+    "@simplewebauthn/server": "13.3.2",
     "hono": "4.13.19",
     "postal-mime": "2.7.6",
-    "workers-ai-provider": "^4.0.0",
     "zod": "4.6.7"
   },
   "devDependencies": {

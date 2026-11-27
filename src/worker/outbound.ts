@@ -98,7 +98,7 @@ export async function deliverOutbound(env: Env, input: DurableOutboundInput, sen
     (identity_address, address, display_name, source, send_count, first_sent_at, last_sent_at)
     VALUES (?, ?, COALESCE((
       SELECT NULLIF(trim(sender_name), '') FROM messages
-      WHERE direction = 'inbound' AND lower(sender_address) = ? AND sender_name != ''
+      WHERE direction = 'inbound' AND identity_address = ? AND lower(sender_address) = ? AND sender_name != ''
       ORDER BY received_at DESC LIMIT 1
     ), ''), 'learned', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     ON CONFLICT(identity_address, address) DO UPDATE SET
@@ -107,7 +107,7 @@ export async function deliverOutbound(env: Env, input: DurableOutboundInput, sen
       first_sent_at = COALESCE(contacts.first_sent_at, excluded.first_sent_at),
       last_sent_at = excluded.last_sent_at,
       updated_at = CURRENT_TIMESTAMP`)
-    .bind(input.from, item.address, item.address));
+    .bind(input.from, item.address, input.from, item.address));
   await env.DB.batch([
     env.DB.prepare("UPDATE messages SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
       .bind(sentCount > 0 ? "ready" : "failed", messageRowId),

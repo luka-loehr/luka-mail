@@ -38,6 +38,9 @@ interface CommandResult {
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const MAX_LINE_BYTES = 64 * 1024;
+const MAX_LITERAL_BYTES = 16 * 1024 * 1024;
+const MAX_UNTAGGED_RESPONSES = 100_000;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -61,7 +64,7 @@ export async function connectTlsTransport(hostname: string, port: number): Promi
 }
 
 export class ImapClient {
-  private buffer = new Uint8Array(0);
+  private buffer: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
   private tagCounter = 0;
 
   private constructor(private readonly transport: ImapTransport, private readonly timeoutMs: number) {}
@@ -168,6 +171,7 @@ export class ImapClient {
         return { status: match[1].toUpperCase() as CommandResult["status"], text: match[2] ?? "", untagged };
       }
       if (response.line.startsWith("+")) continue;
+      if (untagged.length >= MAX_UNTAGGED_RESPONSES) throw new Error("IMAP untagged response count exceeded limit");
       untagged.push(response);
     }
   }
@@ -180,7 +184,7 @@ export class ImapClient {
       const literal = /\{(\d+)(?:\+)?\}$/.exec(line);
       if (!literal) return { line, literals };
       const size = Number(literal[1]);
-      if (!Number.isSafeInteger(size) || size > 64 * 1024 * 1024) throw new Error(`IMAP literal too large: ${size}`);
+      if (!Number.isSafeInteger(size) || size > MAX_LITERAL_BYTES) throw new Error(`IMAP literal too large: ${size}`);
       literals.push(await this.readBytes(size));
       line = `${line.slice(0, literal.index)}<literal>${await this.readLine()}`;
     }
@@ -190,20 +194,49 @@ export class ImapClient {
     for (;;) {
       const newline = this.buffer.indexOf(10);
       if (newline !== -1) {
+        if (newline > MAX_LINE_BYTES) throw new Error("IMAP response line exceeded maximum length");
         const end = newline > 0 && this.buffer[newline - 1] === 13 ? newline - 1 : newline;
         const line = decoder.decode(this.buffer.subarray(0, end));
         this.buffer = this.buffer.subarray(newline + 1);
         return line;
       }
+      if (this.buffer.byteLength > MAX_LINE_BYTES) throw new Error("IMAP response line exceeded maximum length");
       await this.fill();
     }
   }
 
   private async readBytes(size: number): Promise<Uint8Array> {
-    while (this.buffer.byteLength < size) await this.fill();
-    const bytes = this.buffer.subarray(0, size);
-    this.buffer = this.buffer.subarray(size);
-    return bytes;
+    if (size === 0) return new Uint8Array(0);
+    if (this.buffer.byteLength >= size) {
+      const bytes = this.buffer.slice(0, size);
+      this.buffer = this.buffer.subarray(size);
+      return bytes;
+    }
+    const chunks: Uint8Array[] = [];
+    let collected = 0;
+    if (this.buffer.byteLength > 0) {
+      chunks.push(this.buffer);
+      collected = this.buffer.byteLength;
+      this.buffer = new Uint8Array(0);
+    }
+    while (collected < size) {
+      const chunk = await withTimeout(this.transport.read(), this.timeoutMs, "IMAP read timed out");
+      if (chunk === null) throw new Error("IMAP connection closed unexpectedly");
+      chunks.push(chunk);
+      collected += chunk.byteLength;
+    }
+    const output = new Uint8Array(size);
+    let offset = 0;
+    for (let index = 0; index < chunks.length; index += 1) {
+      const chunk = chunks[index]!;
+      const take = Math.min(chunk.byteLength, size - offset);
+      output.set(chunk.subarray(0, take), offset);
+      offset += take;
+      if (take < chunk.byteLength) {
+        this.buffer = chunk.subarray(take);
+      }
+    }
+    return output;
   }
 
   private async fill(): Promise<void> {

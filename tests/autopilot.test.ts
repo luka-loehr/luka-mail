@@ -251,7 +251,7 @@ describe("repeating alerts", () => {
   it("tidies alerts that were already in the inbox", async () => {
     const stage = async (id: string, subject: string, at: string) => {
       await stageReady(id, OWNER, "", "alerts@ops.example.org", subject, subject, at);
-      await env.DB.prepare("UPDATE messages SET triage_category = 'notification', triaged_at = ? WHERE id = ?").bind(at, id).run();
+      await env.DB.prepare("UPDATE messages SET triage_category = 'notification', sender_authenticated = 1, triaged_at = ? WHERE id = ?").bind(at, id).run();
     };
     const hour = (h: number) => new Date(Date.now() - (10 - h) * 3_600_000).toISOString();
     await stage("a1", "[Cluster] Compute 1 is not reachable", hour(1));
@@ -367,7 +367,7 @@ describe("reply drafts", () => {
     expect(await draftReply(ai.env, "colleague")).toBe("exists");
     expect(ai.calls.length).toBe(1);
     expect(await actions("colleague")).toEqual(["draft"]);
-    expect((await env.DB.prepare("SELECT kind, model FROM ai_runs WHERE kind = 'draft'").first())).toEqual({ kind: "draft", model: "@cf/zai-org/glm-5.3-flash" });
+    expect((await env.DB.prepare("SELECT kind, model FROM ai_runs WHERE kind = 'draft'").first())).toEqual({ kind: "draft", model: "@cf/meta/llama-3.1-8b-instruct-fp8" });
 
     const [action] = (await env.DB.prepare("SELECT * FROM autopilot_actions WHERE message_id = 'colleague'").all<ActionRow>()).results;
     await undoAction(env as unknown as Env, action!);
@@ -450,7 +450,7 @@ describe("api", () => {
 });
 
 describe("brief", () => {
-  it("lists what waits on the owner and what was handled, lands in the inbox once a day, and stays out of the graph", async () => {
+  it("lists what waits on the owner and what was handled, and lands in the inbox once a day", async () => {
     await stageReady("waiting", OWNER, "Alex", "alex@example.org", "Tuesday?", "Does Tuesday 11:30 work?",
       new Date(Date.now() - 3_600_000).toISOString());
     await env.DB.prepare("UPDATE messages SET triage_category = 'personal', triage_needs_reply = 0.9, triage_urgency = 1, triaged_at = ? WHERE id = 'waiting'")
@@ -465,10 +465,10 @@ describe("brief", () => {
     expect(await maybeWriteDailyBrief(ai.env, at)).toEqual({ written: false, reason: "Already written today" });
     expect(await maybeWriteDailyBrief(ai.env, new Date("2026-10-24T09:00:00.000Z"))).toEqual({ written: false, reason: "Not brief time" });
 
-    const brief = await env.DB.prepare(`SELECT folder, sender_name, subject, text_key, triaged_at IS NOT NULL AS triaged,
-      (SELECT COUNT(*) FROM kg_state WHERE message_id = m.id) AS indexed FROM messages m WHERE id = ?`)
-      .bind(first.messageId).first<{ folder: string; sender_name: string; subject: string; text_key: string; triaged: number; indexed: number }>();
-    expect(brief).toMatchObject({ folder: "inbox", sender_name: "Autopilot", subject: "Brief: 1 waiting on you, 1 handled", triaged: 1, indexed: 0 });
+    const brief = await env.DB.prepare(`SELECT folder, sender_name, subject, text_key, triaged_at IS NOT NULL AS triaged
+      FROM messages m WHERE id = ?`)
+      .bind(first.messageId).first<{ folder: string; sender_name: string; subject: string; text_key: string; triaged: number }>();
+    expect(brief).toMatchObject({ folder: "inbox", sender_name: "Autopilot", subject: "Brief: 1 waiting on you, 1 handled", triaged: 1 });
     const text = await (await env.MAIL.get(brief!.text_key))!.text();
     expect(text).toContain("• Alex: Asks whether Tuesday 11:30 works for a call.");
     expect(text).toContain("Archived: 1");
@@ -492,8 +492,10 @@ async function actions(id: string): Promise<string[]> {
     .all<{ action: string }>()).results.map((row) => row.action);
 }
 
-function mime(from: string, subject: string): string {
+function mime(from: string, subject: string, authenticated = true): string {
+  const domain = (from.match(/<([^>]+)>/)?.[1] ?? from).split("@").at(-1)?.trim().toLowerCase() ?? "example.com";
   return [
+    ...(authenticated ? [`Authentication-Results: mx.cloudflare.net; dmarc=pass header.from=${domain}`] : []),
     `From: ${from}`,
     `To: ${OWNER}`,
     `Subject: ${subject}`,

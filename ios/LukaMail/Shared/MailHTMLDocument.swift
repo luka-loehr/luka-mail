@@ -36,6 +36,7 @@ struct MailHTMLDocument: Equatable, Sendable {
     let html: String
     let analysis: MailHTMLAnalysis
     let isDark: Bool
+    var allowRemoteImages = false
 
     var appearance: MailHTMLAppearance { analysis.appearance }
 
@@ -61,10 +62,11 @@ struct MailHTMLDocument: Equatable, Sendable {
         let analysis: MailHTMLAnalysis
         switch source {
         case .html(let html):
-            rawBody = inlineImages.reduce(html) { partial, item in
+            let resolved = inlineImages.reduce(html) { partial, item in
                 partial.replacingOccurrences(of: "cid:\(item.key)", with: item.value, options: .caseInsensitive)
             }
-            analysis = analyze(rawBody)
+            analysis = analyze(resolved)
+            rawBody = sanitizeUntrustedHTML(resolved)
         case .plainText(let text):
             rawBody = plainTextHTML(text)
             analysis = MailHTMLAnalysis()
@@ -74,7 +76,7 @@ struct MailHTMLDocument: Equatable, Sendable {
         let palette = Palette(appearance: analysis.appearance, isDark: isDark)
         let onCard = isDark && analysis.appearance == .original
         let padding = onCard ? cardPadding ?? (horizontalPadding, verticalPadding) : (horizontalPadding, verticalPadding)
-        let imagePolicy = allowRemoteImages ? "https: http: data: cid:" : "data:"
+        let imagePolicy = allowRemoteImages ? "https: data:" : "data:"
         let colorScheme = analysis.appearance == .original ? "light" : (isDark ? "dark" : "light")
         let document = """
         <!doctype html><html class="lm-\(analysis.appearance.rawValue)"><head>
@@ -97,7 +99,7 @@ struct MailHTMLDocument: Equatable, Sendable {
         .lm-plain blockquote { margin: 0.2em 0; padding: 0 0 0 10px; border-left: 3px solid var(--lm-rule); color: var(--lm-secondary); }
         </style></head><body><div id="lm-root">\(body)</div></body></html>
         """
-        return MailHTMLDocument(html: document, analysis: analysis, isDark: isDark)
+        return MailHTMLDocument(html: document, analysis: analysis, isDark: isDark, allowRemoteImages: allowRemoteImages)
     }
 
     /// Renders off the main actor; large newsletters take a few milliseconds of regex work.
@@ -135,8 +137,11 @@ struct MailHTMLDocument: Equatable, Sendable {
           root.style.transform = 'scale(' + (available / natural) + ')';
         }
         const style = getComputedStyle(document.body);
-        const height = Math.ceil(root.getBoundingClientRect().height
-          + parseFloat(style.paddingTop || '0') + parseFloat(style.paddingBottom || '0'));
+        const pad = parseFloat(style.paddingTop || '0') + parseFloat(style.paddingBottom || '0');
+        const height = Math.ceil(Math.max(
+          root.getBoundingClientRect().height + pad,
+          document.documentElement.scrollHeight
+        ));
         if (Math.abs(height - lastHeight) >= 1) {
           lastHeight = height;
           window.webkit.messageHandlers.\(heightMessageName).postMessage(height);
@@ -165,7 +170,7 @@ struct MailHTMLDocument: Equatable, Sendable {
         ) != nil
 
         analysis.hasRemoteImages = html.range(
-            of: #"<img\b[^>]*\bsrc\s*=\s*["']?\s*(https?:)?//|url\(\s*["']?\s*(https?:)?//|\bbackground\s*=\s*["']?\s*https?:"#,
+            of: #"<(?:img|source|video|input|image)\b[^>]*\b(?:src|srcset|poster|href|xlink:href)\s*=\s*["']?\s*(?:https?:)?//|url\(\s*["']?\s*(?:https?:)?//|\bbackground\s*=\s*["']?\s*(?:https?:)?//"#,
             options: [.regularExpression, .caseInsensitive]
         ) != nil
 
@@ -350,6 +355,30 @@ struct MailHTMLDocument: Equatable, Sendable {
             link = dark ? "#4da3ff" : "#0066cc"
             rule = dark ? "rgba(235, 235, 245, 0.28)" : "rgba(60, 60, 67, 0.29)"
         }
+    }
+
+    /// Strips document-level and resource-hint elements (`<link rel="dns-prefetch">`,
+    /// `<meta http-equiv="refresh">`, `<base>`, `<script>`, `<iframe>`, `<object>`, `<embed>`)
+    /// that could trigger preconnect/DNS tracking beacons or subframes outside CSP `img-src`.
+    static func sanitizeUntrustedHTML(_ html: String) -> String {
+        var cleaned = html
+        for pattern in [
+            #"<script\b[^>]*>[\s\S]*?</script\s*>"#,
+            #"<iframe\b[^>]*>[\s\S]*?</iframe\s*>"#,
+            #"<object\b[^>]*>[\s\S]*?</object\s*>"#,
+            #"<(?:script|iframe|object|embed|link|meta|base)\b[^>]*>"#,
+        ] {
+            cleaned = cleaned.replacingOccurrences(of: pattern, with: "", options: [.regularExpression, .caseInsensitive])
+        }
+        return cleaned
+    }
+
+    /// Network content-blocking rules enforced at the WebKit engine layer.
+    static func contentBlockingRulesJSON(allowRemoteImages: Bool) -> String {
+        if allowRemoteImages {
+            return #"[{"trigger":{"url-filter":"^http://"},"action":{"type":"block"}}]"#
+        }
+        return #"[{"trigger":{"url-filter":"^https?://"},"action":{"type":"block"}}]"#
     }
 
     // MARK: - Regex helpers

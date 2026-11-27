@@ -1,12 +1,12 @@
 // The daily brief: one message in the owner's inbox at 07:00 owner local time with
 // what needs them, what is urgent, and everything the autopilot did since the
 // last brief (each with the id that undoes it). The structure is built from
-// the database; GLM-5.3-Flash only turns each waiting mail into one line.
+// the database; a lightweight Workers AI instruct model turns each waiting mail into one line.
 
 import { alertKey, readAutopilotSettings, tidyInbox, withinBudget, type ActionKind } from "./autopilot";
-import { ownerTimezone } from "./config";
+import { draftModel, ownerTimezone } from "./config";
 import { enqueuePushNotification } from "./push";
-import { DRAFT_MODEL, ownText } from "./reply-drafts";
+import { ownText } from "./reply-drafts";
 import { readModelText } from "./spam";
 import type { Env } from "./types";
 import { recordAiRun } from "./usage";
@@ -67,23 +67,25 @@ async function summarizeWaiting(env: Env, rows: WaitingRow[]): Promise<string[]>
     const text = row.text_key ? await (await env.MAIL.get(row.text_key))?.text() ?? row.preview : row.preview;
     return `[${index + 1}] From: ${name(row)}\nSubject: ${row.subject}\n${ownText(text).slice(0, 700)}`;
   }));
+  const model = draftModel(env);
   const startedAt = Date.now();
   try {
-    const response = await env.AI.run(DRAFT_MODEL as Parameters<Ai["run"]>[0], {
+    const response = await env.AI.run(model as Parameters<Ai["run"]>[0], {
       messages: [
         { role: "system", content: "For each numbered mail, write one line of at most 14 words, in English: what the sender wants from the mailbox owner, "
           + "with any deadline. No names, no numbering. Answer with a JSON array of strings, one per mail, in order." },
         { role: "user", content: mails.join("\n\n") },
       ],
-      max_tokens: 600, temperature: 0, reasoning_effort: "low",
-    } as never) as { usage?: { prompt_tokens?: number; completion_tokens?: number } };
-    await recordAiRun(env, { kind: "brief", keyId: null, model: DRAFT_MODEL, prompt: null, identity: null, toolCalls: null,
-      usage: { inputTokens: response?.usage?.prompt_tokens ?? 0, cachedInputTokens: 0, outputTokens: response?.usage?.completion_tokens ?? 0 },
+      max_tokens: 600, temperature: 0,
+    } as never) as { usage?: { prompt_tokens?: number; completion_tokens?: number; input_tokens?: number; output_tokens?: number } };
+    await recordAiRun(env, { kind: "brief", keyId: null, model, prompt: null, identity: null, toolCalls: null,
+      usage: { inputTokens: response?.usage?.prompt_tokens ?? response?.usage?.input_tokens ?? 0, cachedInputTokens: 0,
+        outputTokens: response?.usage?.completion_tokens ?? response?.usage?.output_tokens ?? 0 },
       durationMs: Date.now() - startedAt });
     const match = readModelText(response).match(/\[[\s\S]*\]/);
     const lines: unknown = match ? JSON.parse(match[0]) : null;
     if (Array.isArray(lines) && lines.length === rows.length && lines.every((line) => typeof line === "string" && line.trim())) {
-      return lines.map((line: string) => line.trim());
+      return lines.map((line: string) => line.replaceAll(/[\r\n\0]+/g, " ").trim().slice(0, 200));
     }
   } catch (error) {
     console.error(JSON.stringify({ event: "brief-summary-failed", error: String(error).slice(0, 300) }));
@@ -182,16 +184,12 @@ export async function writeDailyBrief(env: Env, now = new Date()): Promise<Brief
     env.MAIL.put(textKey, text, { httpMetadata: { contentType: "text/plain; charset=utf-8" } }),
   ]);
   const receivedAt = now.toISOString();
-  await env.DB.batch([
-    env.DB.prepare(`INSERT INTO messages (id, thread_id, message_id, direction, folder, subject, sender_name, sender_address,
-        recipients_json, preview, text_key, raw_key, received_at, size, status, identity_address,
+  await env.DB.prepare(`INSERT INTO messages (id, thread_id, message_id, direction, folder, subject, sender_name, sender_address,
+        recipients_json, preview, text_key, raw_key, received_at, size, status, identity_address, sender_authenticated,
         triage_category, triage_confidence, triage_spam, triage_needs_reply, triage_urgency, triage_model, triaged_at, drafted_at)
-      VALUES (?, ?, ?, 'inbound', 'inbox', ?, 'Autopilot', ?, ?, ?, ?, ?, ?, ?, 'ready', ?, 'agent', 1, 0, 0, 0, 'autopilot', ?, ?)`)
-      .bind(id, id, `<brief-${id}@lmail.autopilot>`, subject, owner.address, JSON.stringify([{ address: owner.address }]),
-        text.replace(/\s+/g, " ").slice(0, 240), textKey, rawKey, receivedAt, raw.length, owner.address, receivedAt, receivedAt),
-    // The brief is about mail, not mail itself: keep it out of the knowledge graph.
-    env.DB.prepare("DELETE FROM kg_state WHERE message_id = ?").bind(id),
-  ]);
+      VALUES (?, ?, ?, 'inbound', 'inbox', ?, 'Autopilot', ?, ?, ?, ?, ?, ?, ?, 'ready', ?, 1, 'agent', 1, 0, 0, 0, 'autopilot', ?, ?)`)
+    .bind(id, id, `<brief-${id}@lmail.autopilot>`, subject, owner.address, JSON.stringify([{ address: owner.address }]),
+      text.replace(/\s+/g, " ").slice(0, 240), textKey, rawKey, receivedAt, raw.length, owner.address, receivedAt, receivedAt).run();
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO autopilot_settings (key, value) VALUES ('autopilot.last_brief_at', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`).bind(receivedAt),

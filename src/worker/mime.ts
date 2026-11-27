@@ -32,9 +32,33 @@ export interface PreparedEmail {
   recipients: OutboundRecipient[];
 }
 
-function encodeHeader(value: string): string {
-  if (/^[\x20-\x7E]*$/.test(value)) return value.replaceAll(/[\r\n]/g, " ");
-  const bytes = new TextEncoder().encode(value.replaceAll(/[\r\n]/g, " "));
+function encodeHeader(value: string, fold = true): string {
+  const clean = value.replaceAll(/[\r\n\0]/g, " ");
+  if (/^[\x20-\x7E]*$/.test(clean)) {
+    if (!fold || clean.length <= 78) return clean;
+  }
+  const encoder = new TextEncoder();
+  const words: string[] = [];
+  let chunk = "";
+  let chunkBytes = 0;
+  for (const char of clean) {
+    const charBytes = encoder.encode(char).byteLength;
+    if (fold && chunkBytes > 0 && chunkBytes + charBytes > 45) {
+      words.push(encodedWord(encoder.encode(chunk)));
+      chunk = char;
+      chunkBytes = charBytes;
+    } else {
+      chunk += char;
+      chunkBytes += charBytes;
+    }
+  }
+  if (chunk.length > 0 || words.length === 0) {
+    words.push(encodedWord(encoder.encode(chunk)));
+  }
+  return words.join("\r\n ");
+}
+
+function encodedWord(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return `=?UTF-8?B?${btoa(binary)}?=`;
@@ -68,7 +92,7 @@ function mailbox(address: string, displayName: string | undefined): string {
 }
 
 function mimeParameter(value: string): string {
-  return encodeHeader(value.replaceAll(/["\\]/g, "_"));
+  return encodeHeader(value.replaceAll(/["\\]/g, "_"), false);
 }
 
 export function buildMime(from: string, input: Omit<OutboundMessage, "from"> | OutboundMessage): { raw: string; messageId: string } {

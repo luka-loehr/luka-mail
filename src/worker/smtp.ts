@@ -24,12 +24,14 @@ interface SmtpReply {
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const MAX_LINE_BYTES = 16 * 1024;
+const MAX_REPLY_LINES = 64;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 export async function connectStartTlsTransport(hostname: string, port: number): Promise<SmtpTransport> {
   const { connect } = await import("cloudflare:sockets");
-  let socket = connect({ hostname, port }, { secureTransport: "starttls", allowHalfOpen: false });
+  let socket = connect({ hostname, port }, { secureTransport: port === 465 ? "on" : "starttls", allowHalfOpen: false });
   let reader = socket.readable.getReader();
   let writer = socket.writable.getWriter();
   return {
@@ -41,6 +43,7 @@ export async function connectStartTlsTransport(hostname: string, port: number): 
       await writer.write(data);
     },
     async startTls() {
+      if (port === 465) return;
       reader.releaseLock();
       writer.releaseLock();
       socket = socket.startTls();
@@ -60,9 +63,12 @@ export async function submitViaSmtp(input: SmtpSubmission,
   try {
     await client.expect(220, "greeting");
     await client.command("EHLO lmail.invalid", 250);
-    await client.command("STARTTLS", 220);
-    await transport.startTls();
-    await client.command("EHLO lmail.invalid", 250);
+    if (input.port !== 465) {
+      await client.command("STARTTLS", 220);
+      client.prepareTlsUpgrade();
+      await transport.startTls();
+      await client.command("EHLO lmail.invalid", 250);
+    }
     await client.authenticate(input.username, input.password);
     await client.command(`MAIL FROM:<${cleanAddress(input.from)}>`, 250);
     for (const recipient of input.recipients) {
@@ -116,10 +122,18 @@ class SmtpClient {
     return reply;
   }
 
+  prepareTlsUpgrade(): void {
+    if (this.buffer.byteLength > 0) {
+      throw new Error("Unexpected pipelined bytes after SMTP STARTTLS");
+    }
+    this.buffer = new Uint8Array(0);
+  }
+
   // Multi-line replies use "250-..." continuations and end with "250 ...".
   private async reply(): Promise<SmtpReply> {
     const lines: string[] = [];
     for (;;) {
+      if (lines.length >= MAX_REPLY_LINES) throw new Error("SMTP reply exceeded line limit");
       const line = await this.readLine();
       lines.push(line);
       const match = /^(\d{3})([ -])/.exec(line);
@@ -132,11 +146,13 @@ class SmtpClient {
     for (;;) {
       const newline = this.buffer.indexOf(10);
       if (newline !== -1) {
+        if (newline > MAX_LINE_BYTES) throw new Error("SMTP reply line exceeded maximum length");
         const end = newline > 0 && this.buffer[newline - 1] === 13 ? newline - 1 : newline;
         const line = decoder.decode(this.buffer.subarray(0, end));
         this.buffer = this.buffer.subarray(newline + 1);
         return line;
       }
+      if (this.buffer.byteLength > MAX_LINE_BYTES) throw new Error("SMTP reply line exceeded maximum length");
       const chunk = await withTimeout(this.transport.read(), this.timeoutMs, "SMTP read timed out");
       if (chunk === null) throw new Error("SMTP connection closed unexpectedly");
       const merged = new Uint8Array(this.buffer.byteLength + chunk.byteLength);

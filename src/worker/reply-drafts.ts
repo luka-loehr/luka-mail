@@ -1,24 +1,19 @@
-// Reply drafts for mail a person is waiting on. GLM-5.3-Flash writes the reply
-// in the owner's voice: a style guide learned from his sent mail, plus up to
-// three mails he wrote earlier to the same person (or, failing that, to the
-// same organisation). In a blind comparison against 50 of his real replies
-// (2026-10-23) these drafts beat an un-tuned prompt 37 to 13, and 29 to 6 for
-// mail to teachers. Drafts are only saved, never sent.
+// Reply drafts for mail a person is waiting on. An active Workers AI instruct
+// model writes the reply in the owner's voice: a style guide learned from sent
+// mail, plus up to three mails written earlier to the same person (or, failing
+// that, to the same organisation). Drafts are only saved, never sent.
 
-import { ownerName, ownerTimezone } from "./config";
+import { DEFAULT_DRAFT_MODEL, draftModel, ownerName, ownerTimezone } from "./config";
 import { replyStyle, signedForIdentity } from "./owner-profile";
 import { readModelText } from "./spam";
 import type { Env, MessageRow } from "./types";
 import { recordAiRun } from "./usage";
 import { readAutopilotSettings, withinBudget } from "./autopilot";
 
-export const DRAFT_MODEL = "@cf/zai-org/glm-5.3-flash";
+export const DRAFT_MODEL = DEFAULT_DRAFT_MODEL;
 const EXAMPLES = 3;
 const EXAMPLE_CHARS = 900;
 const INCOMING_CHARS = 3_000;
-// Mail providers shared by strangers: "same domain" says nothing about style.
-const SHARED_DOMAINS = new Set(["gmail.com", "googlemail.com", "web.de", "gmx.de", "gmx.net", "outlook.com", "outlook.de",
-  "hotmail.com", "hotmail.de", "icloud.com", "me.com", "yahoo.com", "yahoo.de", "t-online.de", "proton.me", "protonmail.com"]);
 
 const QUOTE = /\n\s*(?:Am .{3,80} schrieb[^\n]*|-{3,}\s*Ursprüngliche Nachricht\s*-{3,}|-{3,}\s*Original Message\s*-{3,}|On .{3,120} wrote:|Von: [^\n]+|From: [^\n]+\nSent: [^\n]+|>[^\n]*)/i;
 const SIGNATURE = /\n[\s\u200b]*-{6,}[\s\u200b]*\n[\s\S]*/;
@@ -49,17 +44,21 @@ interface ExampleRow {
   recipients_json: string;
 }
 
-export async function earlierMails(env: Env, address: string, before: string): Promise<Array<ExampleRow & { text: string }>> {
-  const query = (pattern: string, limit: number) => env.DB.prepare(`SELECT subject, text_key, received_at, recipients_json FROM messages
+export async function earlierMails(
+  env: Env,
+  address: string,
+  before: string,
+  identityAddress?: string | null,
+): Promise<Array<ExampleRow & { text: string }>> {
+  const normalizedAddress = address.trim().toLowerCase();
+  const normalizedIdentity = identityAddress?.trim().toLowerCase() ?? null;
+  const rows = (await env.DB.prepare(`SELECT subject, text_key, received_at, recipients_json FROM messages
     WHERE direction = 'outbound' AND status = 'ready' AND folder != 'trash' AND text_key IS NOT NULL
-      AND recipients_json LIKE ? ESCAPE '\\' AND received_at < ?
-    ORDER BY received_at DESC LIMIT ?`).bind(pattern, before, limit).all<ExampleRow>();
-  const rows = (await query(`%"${likePattern(address)}"%`, EXAMPLES * 2)).results;
-  const domain = address.split("@")[1] ?? "";
-  if (rows.length < EXAMPLES && domain && !SHARED_DOMAINS.has(domain)) {
-    const seen = new Set(rows.map((row) => row.received_at));
-    rows.push(...(await query(`%@${likePattern(domain)}"%`, EXAMPLES * 3)).results.filter((row) => !seen.has(row.received_at)));
-  }
+      AND (? IS NULL OR identity_address = ?)
+      AND lower(recipients_json) LIKE ? ESCAPE '\\' AND received_at < ?
+    ORDER BY received_at DESC LIMIT ?`)
+    .bind(normalizedIdentity, normalizedIdentity, `%"${likePattern(normalizedAddress)}"%`, before, EXAMPLES * 3)
+    .all<ExampleRow>()).results;
   const examples: Array<ExampleRow & { text: string }> = [];
   for (const row of rows) {
     if (examples.length >= EXAMPLES) break;
@@ -123,15 +122,20 @@ export async function draftReply(env: Env, messageId: string, options: { onDeman
 
   const [incoming, examples] = await Promise.all([
     message.text_key ? env.MAIL.get(message.text_key).then((object) => object?.text() ?? message.preview) : Promise.resolve(message.preview),
-    earlierMails(env, message.sender_address, message.received_at),
+    message.sender_authenticated === 0
+      ? Promise.resolve([])
+      : earlierMails(env, message.sender_address, message.received_at, message.identity_address),
   ]);
   const messages = buildDraftPrompt(env, message, incoming, examples);
+  const model = draftModel(env);
   const startedAt = Date.now();
-  const response = await env.AI.run(DRAFT_MODEL as Parameters<Ai["run"]>[0],
-    { messages, max_tokens: 700, temperature: 0.3, reasoning_effort: "low" } as never) as { usage?: { prompt_tokens?: number; completion_tokens?: number } };
-  await recordAiRun(env, { kind: "draft", keyId: null, model: DRAFT_MODEL, prompt: null, identity: message.identity_address,
-    toolCalls: null, usage: { inputTokens: response?.usage?.prompt_tokens ?? 0, cachedInputTokens: 0,
-      outputTokens: response?.usage?.completion_tokens ?? 0 }, durationMs: Date.now() - startedAt });
+  const response = await env.AI.run(model as Parameters<Ai["run"]>[0],
+    { messages, max_tokens: 700, temperature: 0.3 } as never) as {
+      usage?: { prompt_tokens?: number; completion_tokens?: number; input_tokens?: number; output_tokens?: number };
+    };
+  await recordAiRun(env, { kind: "draft", keyId: null, model, prompt: null, identity: message.identity_address,
+    toolCalls: null, usage: { inputTokens: response?.usage?.prompt_tokens ?? response?.usage?.input_tokens ?? 0, cachedInputTokens: 0,
+      outputTokens: response?.usage?.completion_tokens ?? response?.usage?.output_tokens ?? 0 }, durationMs: Date.now() - startedAt });
   let body = cleanDraft(readModelText(response));
   if (!body) throw new Error("The draft model returned no text");
   body = signedForIdentity(env, message.identity_address, body);

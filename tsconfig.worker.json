@@ -14,5 +14,5 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
-  "include": ["src/worker", "tests/**/*.test.ts"]
+  "include": ["src/worker", "tests/**/*.test.ts", "openapi/**/*.json"]
 }

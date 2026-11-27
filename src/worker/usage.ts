@@ -14,13 +14,16 @@ interface ModelPrice {
 }
 
 const MODEL_PRICES: Record<string, ModelPrice> = {
-  "@cf/deepseek-ai/deepseek-v4-flash-0731": { inPerM: 0.44, cachedInPerM: 0.014, outPerM: 1.32 },
-  "@cf/meta/llama-3.3-70b-instruct-fp8-fast": { inPerM: 0.29, cachedInPerM: 0.29, outPerM: 2.25 },
+  "@cf/meta/llama-3.1-8b-instruct-fp8": { inPerM: 0.045, cachedInPerM: 0.045, outPerM: 0.384 },
   "@cf/meta/llama-3.1-8b-instruct-fast": { inPerM: 0.045, cachedInPerM: 0.045, outPerM: 0.384 },
+  "@cf/meta/llama-3.2-3b-instruct": { inPerM: 0.051, cachedInPerM: 0.051, outPerM: 0.335 },
+  "@cf/meta/llama-3.2-1b-instruct": { inPerM: 0.027, cachedInPerM: 0.027, outPerM: 0.201 },
+  "@cf/meta/llama-4-scout-17b-16e-instruct": { inPerM: 0.27, cachedInPerM: 0.27, outPerM: 0.85 },
+  "@cf/meta/llama-3.3-70b-instruct-fp8-fast": { inPerM: 0.293, cachedInPerM: 0.293, outPerM: 2.253 },
+  "@cf/google/gemma-3-12b-it": { inPerM: 0.345, cachedInPerM: 0.345, outPerM: 0.56 },
   // Decision models: billed for input only.
   "@cf/cloudflare/clef": { inPerM: 0.24, cachedInPerM: 0.24, outPerM: 0 },
   "@cf/cloudflare/clef-flash": { inPerM: 0.038, cachedInPerM: 0.038, outPerM: 0 },
-  "@cf/zai-org/glm-5.3-flash": { inPerM: 0.15, cachedInPerM: 0.15, outPerM: 0.5 },
 };
 
 export interface RunUsage {
@@ -44,7 +47,7 @@ export function priceRun(model: string, usage: RunUsage): RunCost {
 }
 
 export interface AiRunRecord {
-  kind: "agent" | "kg-sync" | "spam" | "triage" | "draft" | "brief";
+  kind: "spam" | "triage" | "draft" | "brief";
   keyId: string | null;
   model: string;
   prompt: string | null;

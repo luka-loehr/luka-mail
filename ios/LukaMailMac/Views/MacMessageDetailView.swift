@@ -207,7 +207,7 @@ struct MacMessageDetailView: View {
             let data = try await store.rawMessageData(id: message.id)
             let directory = FileManager.default.temporaryDirectory.appending(path: "LukaMail", directoryHint: .isDirectory)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let url = directory.appending(path: "\(message.id).eml")
+            let url = directory.appending(path: "\(MailSafeFilename.token(message.id, fallback: "message")).eml")
             try data.write(to: url, options: [.atomic])
             previewURL = url
         } catch {

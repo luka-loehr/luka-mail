@@ -67,6 +67,13 @@ final class PushNotificationCoordinator {
         if target == consumed { target = nil }
     }
 
+    func clearRegistration() {
+        deviceToken = nil
+        target = nil
+        PendingNotificationTap.clear()
+        UIApplication.shared.unregisterForRemoteNotifications()
+    }
+
     nonisolated static func target(from userInfo: [AnyHashable: Any]) -> MailNotificationTarget? {
         guard let messageID = userInfo["messageId"] as? String,
               let identity = userInfo["identity"] as? String,
@@ -82,6 +89,11 @@ private enum PendingNotificationTap {
     static func store(_ target: MailNotificationTarget) {
         UserDefaults.standard.set(target.messageID, forKey: messageIDKey)
         UserDefaults.standard.set(target.identity, forKey: identityKey)
+    }
+
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: messageIDKey)
+        UserDefaults.standard.removeObject(forKey: identityKey)
     }
 
     static func take() -> MailNotificationTarget? {

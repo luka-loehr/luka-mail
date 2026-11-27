@@ -1,10 +1,10 @@
 import { Hono } from "hono";
+import openApiSpec from "../../openapi/openapi.json";
 import { api } from "./api";
 import { runAutopilotSweep } from "./autopilot";
 import { securityHeaders } from "./auth";
 import { maybeWriteDailyBrief } from "./brief";
 import { runExternalSync } from "./external";
-import { runKnowledgeGraphSync } from "./kg";
 import { acceptInbound, processInbound } from "./inbound";
 import { runMaintenance } from "./maintenance";
 import { deliverPushJob, enqueuePendingPushNotifications } from "./push";
@@ -13,10 +13,11 @@ import { passkeys } from "./passkeys";
 import { draftReply } from "./reply-drafts";
 import { isDraftJob, isPushJob, type Env, type MailQueueJob } from "./types";
 
-const app = new Hono<{ Bindings: Env }>();
-app.use("*", isolateMtaStsHosts);
+export const app = new Hono<{ Bindings: Env; Variables: { cspNonce?: string } }>();
 app.use("*", securityHeaders);
+app.use("*", isolateMtaStsHosts);
 app.get("/health", (c) => c.json({ ok: true, service: c.env.APP_NAME, mode: "mail-client", version: 2 }));
+app.get("/openapi.json", (c) => c.json(openApiSpec, 200, { "Cache-Control": "public, max-age=3600" }));
 app.route("/auth", passkeys);
 app.route("/v1", api);
 app.get("/", (c) =>
@@ -50,14 +51,10 @@ export default {
           done: report.done, synced: report.syncedMessages,
           errors: report.accounts.filter((account) => !account.ok).map((account) => account.error ?? account.identity) })))
         .catch((error) => console.error(JSON.stringify({ event: "external-sync-failed", error: String(error).slice(0, 500) })))
-        // Triage what the sync left untriaged (backfill, outages), then index
-        // whatever the sync (and any other path) just made ready.
+        // Triage what the sync left untriaged (backfill, outages).
         .then(() => runAutopilotSweep(env, { maxMessages: 25, deadlineMs: 60_000 }))
         .then((report) => console.log(JSON.stringify({ event: "autopilot-sweep", ...report })))
-        .catch((error) => console.error(JSON.stringify({ event: "autopilot-sweep-failed", error: String(error).slice(0, 500) })))
-        .then(() => runKnowledgeGraphSync(env, { maxMessages: 30, deadlineMs: 120_000 }))
-        .then((report) => console.log(JSON.stringify({ event: "kg-sync", ...report })))
-        .catch((error) => console.error(JSON.stringify({ event: "kg-sync-failed", error: String(error).slice(0, 500) }))),
+        .catch((error) => console.error(JSON.stringify({ event: "autopilot-sweep-failed", error: String(error).slice(0, 500) }))),
     ]);
   },
   async queue(batch: MessageBatch<MailQueueJob>, env: Env): Promise<void> {
@@ -74,10 +71,10 @@ export default {
           id: isPushJob(job) || isDraftJob(job) ? job.messageId : job.id,
           queue: batch.queue, error: String(error).slice(0, 1_000) }));
         if (batch.queue.endsWith("-dlq")) {
-          // A reply draft that failed five times is dropped: the brief still lists the mail.
+          // A reply draft or push delivery that failed five times is dropped:
+          // the brief still lists the mail, and live mailbox sync still shows it.
           if (isPushJob(job)) {
-            await env.DB.prepare(`UPDATE push_notification_outbox SET status = 'pending', locked_at = NULL,
-              updated_at = CURRENT_TIMESTAMP WHERE message_id = ?`).bind(job.messageId).run();
+            await env.DB.prepare("DELETE FROM push_notification_outbox WHERE message_id = ?").bind(job.messageId).run();
           } else if (!isDraftJob(job)) {
             await env.DB.prepare("UPDATE messages SET status = 'failed', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
               .bind(job.id).run();

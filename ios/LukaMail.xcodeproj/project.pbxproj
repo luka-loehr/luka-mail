@@ -10,23 +10,17 @@
 		09CDDC1EDED5A8E61EA7F30F /* MailHTMLDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04F46A84C245FCA6FF07B22D /* MailHTMLDocumentTests.swift */; };
 		0CDC111C518FE5864E0DB285 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1574E79E2D20300954D90019 /* APIClient.swift */; };
 		177DE3E96357097A56994B48 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 27FEEE64E3BB4AE7DB34661D /* AppIcon.icon */; };
-		17C76781111740787F4F5936 /* AgentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B45F7B4DC94B3C189D858A90 /* AgentStore.swift */; };
 		1B6BE4F36EBDBFC7BFEEB5D1 /* MailPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D84EE94390FC6EDA90D023AF /* MailPresentation.swift */; };
 		1F19750609D1F98B27D059EF /* PushNotificationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CC93201B4BC3A981918792F /* PushNotificationCoordinator.swift */; };
 		234BC052BC256E20AD8BFC0E /* ComposeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD43E87D81A1741C81535C0B /* ComposeView.swift */; };
 		2876A6BC22314C7A74054A0B /* MailWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DB31DE9C8C2E06F591B2EF4 /* MailWebView.swift */; };
-		298EC1A106898808417D41E1 /* AgentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 113DF06A133C7FD97484AB39 /* AgentView.swift */; };
 		3058E1F853B3216279052DBA /* MailPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D84EE94390FC6EDA90D023AF /* MailPresentation.swift */; };
 		3287811E018EE60E060AE1D9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DA6CFF73D4A66AA4C013C6B4 /* Assets.xcassets */; };
 		371C4E8EA1958260B190D733 /* MacMailboxSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD2935B7EB5E7DB75DF55DED /* MacMailboxSidebar.swift */; };
 		3C8EF79380AE426BA83873A2 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 27FEEE64E3BB4AE7DB34661D /* AppIcon.icon */; };
-		421E834967D9934AB31778A4 /* AgentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2225F77D67B282A316DA180 /* AgentTests.swift */; };
 		445CC8DF96E5F244A84EC4D8 /* MailCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55BC199CF64CDAF79077A089 /* MailCache.swift */; };
-		4742C0D769639635EED0844C /* DemoAgentServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B928EC06038C93DE17FCB238 /* DemoAgentServer.swift */; };
 		47E8D320706CECCDEA726E24 /* LukaMailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D654F15A2E12B64F5331E4F5 /* LukaMailTests.swift */; };
-		49338F3505F4836E14EDCE53 /* AgentModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3235EB45E876471E606CAF67 /* AgentModels.swift */; };
 		4CF3244945C53CFEF84FCBBB /* LukaMailApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A3613B48D25DA045B584FAF /* LukaMailApp.swift */; };
-		4FC0CC0D08D46C309469E0A1 /* AgentDraftCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C33E3BBF4FA787260F8FE4F /* AgentDraftCard.swift */; };
 		51D6310EF842C4203013C017 /* DemoMailServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2E9D877C3E623D1B94CA7DD /* DemoMailServer.swift */; };
 		557EDA9FF1A35116C553C92D /* MacSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9BE50D7FC1B3B2257A00D52 /* MacSettingsView.swift */; };
 		5693857AF4334F2F60A7E760 /* NativeAuthSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD57F9ED7E681D9FC7C72320 /* NativeAuthSession.swift */; };
@@ -35,7 +29,6 @@
 		5F5B1BBFF74F5089F176870D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D9033D48D1D5940F02D0FDF1 /* Assets.xcassets */; };
 		6136D1AC467DCE7FA883424F /* MailStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E998A32E330B5878DD7591A8 /* MailStore.swift */; };
 		619EAA5D267176F2A787C9D6 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60D133E7ADB5F58C9A880120 /* RootView.swift */; };
-		62E60B8FBFE399AC4AFF883A /* AgentMessageRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A795E59230552DEF5157303C /* AgentMessageRow.swift */; };
 		68EE00AA9CCB9DD648428128 /* MailHTMLDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04F46A84C245FCA6FF07B22D /* MailHTMLDocumentTests.swift */; };
 		694D95CC9E1AD22986BFB6C2 /* MessageDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 257AE7C27182138CD10183FD /* MessageDetailView.swift */; };
 		6DC7A6790923C7CE6A28518D /* MessageBodyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 655057E69E08D3C67EF03AFC /* MessageBodyView.swift */; };
@@ -52,22 +45,17 @@
 		B1A0A55AE88B0470177E49FD /* MailModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6880D53B16540BECB9471FF5 /* MailModels.swift */; };
 		B4002662E099D30454AE885E /* MailHTMLDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E431D3D0B4C956D15FC81C8 /* MailHTMLDocument.swift */; };
 		B5AB2977DDB6E0EB6E07DC14 /* LukaMailMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0412506C39255755DF461C5 /* LukaMailMacApp.swift */; };
-		B65D2F2B6BA38E41D4A62E94 /* AgentModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3235EB45E876471E606CAF67 /* AgentModels.swift */; };
 		BD8EA6D46A6D9B7AFC7DE3F9 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5BBC6C260857F00C8E8355F /* KeychainStore.swift */; };
 		C48AE64B7D742E7B6825862E /* DemoMailServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2E9D877C3E623D1B94CA7DD /* DemoMailServer.swift */; };
 		C8B6F27BB81C8033CFDC797F /* PushNotificationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CC93201B4BC3A981918792F /* PushNotificationCoordinator.swift */; };
 		CBBC1712CF0D4651B62362D6 /* LukaMailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D654F15A2E12B64F5331E4F5 /* LukaMailTests.swift */; };
 		D011C8E438DF65E7666CB1AF /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26F65A3224368D02B55219C1 /* SearchView.swift */; };
-		D06F2E0267B80D32565F7079 /* DemoAgentServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B928EC06038C93DE17FCB238 /* DemoAgentServer.swift */; };
 		D3A0AAB6B8032E6DC177CA5A /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E83E0AFA8CC99F499F7937F /* SettingsView.swift */; };
 		D8A3BBE3F55E13B3303706AB /* NativeAuthSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD57F9ED7E681D9FC7C72320 /* NativeAuthSession.swift */; };
 		DCE046F5EACEA85E87A892FE /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1574E79E2D20300954D90019 /* APIClient.swift */; };
 		DECD637A8A3DAD939A1F1E4A /* MacMessageList.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA8688980E45DB769B35173F /* MacMessageList.swift */; };
-		E3D984103B9F8091C16BEE2C /* AgentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2225F77D67B282A316DA180 /* AgentTests.swift */; };
 		E717BCAEB0E232FEEF4B96CF /* MailStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E998A32E330B5878DD7591A8 /* MailStore.swift */; };
-		EF5FAE0F99DAC8D81363EBDE /* AgentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B45F7B4DC94B3C189D858A90 /* AgentStore.swift */; };
 		F76B012F8A2497C8805C88D0 /* MacComposeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F294647101B9DD948E51840E /* MacComposeView.swift */; };
-		F8667C3C84707C945258887A /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF5761F29461ADC3CC187B53 /* MarkdownText.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -89,7 +77,6 @@
 
 /* Begin PBXFileReference section */
 		04F46A84C245FCA6FF07B22D /* MailHTMLDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailHTMLDocumentTests.swift; sourceTree = "<group>"; };
-		113DF06A133C7FD97484AB39 /* AgentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentView.swift; sourceTree = "<group>"; };
 		1574E79E2D20300954D90019 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
 		1E61B4B2570C88224D507F7B /* MacRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacRootView.swift; sourceTree = "<group>"; };
 		1F2D1F94FE1299DFBB25549E /* MailWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailWebView.swift; sourceTree = "<group>"; };
@@ -99,7 +86,6 @@
 		27FEEE64E3BB4AE7DB34661D /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 		29187F2246E19A6457DA1BC9 /* MacSenderAvatar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSenderAvatar.swift; sourceTree = "<group>"; };
 		30CCBAF5025DA03D718FF4DE /* MailboxesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailboxesView.swift; sourceTree = "<group>"; };
-		3235EB45E876471E606CAF67 /* AgentModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentModels.swift; sourceTree = "<group>"; };
 		38AF1E4212C545E66EAB711F /* MacMessageDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMessageDetailView.swift; sourceTree = "<group>"; };
 		3DB31DE9C8C2E06F591B2EF4 /* MailWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailWebView.swift; sourceTree = "<group>"; };
 		3DB55F108C39B2A28D8BFE44 /* LukaMailMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LukaMailMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -111,29 +97,23 @@
 		6E83E0AFA8CC99F499F7937F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		7787706B00A7B1FB944568F7 /* MailboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailboxView.swift; sourceTree = "<group>"; };
 		7B43E7408E15AC5C6D233525 /* SenderAvatar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SenderAvatar.swift; sourceTree = "<group>"; };
-		7C33E3BBF4FA787260F8FE4F /* AgentDraftCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDraftCard.swift; sourceTree = "<group>"; };
 		7E431D3D0B4C956D15FC81C8 /* MailHTMLDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailHTMLDocument.swift; sourceTree = "<group>"; };
 		8A3613B48D25DA045B584FAF /* LukaMailApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LukaMailApp.swift; sourceTree = "<group>"; };
 		8CC93201B4BC3A981918792F /* PushNotificationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushNotificationCoordinator.swift; sourceTree = "<group>"; };
 		93AB19F46C180CE084F33DB3 /* LukaMailTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = LukaMailTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9BC264F2208D30C7122B5058 /* LukaMail.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = LukaMail.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		A1B2C3D4E5F60718293A4B5C /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Base.xcconfig; path = Config/Base.xcconfig; sourceTree = "<group>"; };
-		A795E59230552DEF5157303C /* AgentMessageRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentMessageRow.swift; sourceTree = "<group>"; };
 		AA8688980E45DB769B35173F /* MacMessageList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMessageList.swift; sourceTree = "<group>"; };
 		AD57F9ED7E681D9FC7C72320 /* NativeAuthSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAuthSession.swift; sourceTree = "<group>"; };
 		AE9DFEF77701F07DCE837275 /* LukaMailMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LukaMailMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		B45F7B4DC94B3C189D858A90 /* AgentStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentStore.swift; sourceTree = "<group>"; };
 		B5BBC6C260857F00C8E8355F /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
-		B928EC06038C93DE17FCB238 /* DemoAgentServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoAgentServer.swift; sourceTree = "<group>"; };
-		BF5761F29461ADC3CC187B53 /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
 		C9BE50D7FC1B3B2257A00D52 /* MacSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSettingsView.swift; sourceTree = "<group>"; };
 		D654F15A2E12B64F5331E4F5 /* LukaMailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LukaMailTests.swift; sourceTree = "<group>"; };
 		D84EE94390FC6EDA90D023AF /* MailPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailPresentation.swift; sourceTree = "<group>"; };
 		D9033D48D1D5940F02D0FDF1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		DA6CFF73D4A66AA4C013C6B4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		DB938E937DC55991923103F9 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		DD2935B7EB5E7DB75DF55DED /* MacMailboxSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMailboxSidebar.swift; sourceTree = "<group>"; };
 		DD43E87D81A1741C81535C0B /* ComposeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposeView.swift; sourceTree = "<group>"; };
-		E2225F77D67B282A316DA180 /* AgentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTests.swift; sourceTree = "<group>"; };
 		E2E9D877C3E623D1B94CA7DD /* DemoMailServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoMailServer.swift; sourceTree = "<group>"; };
 		E998A32E330B5878DD7591A8 /* MailStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailStore.swift; sourceTree = "<group>"; };
 		F0412506C39255755DF461C5 /* LukaMailMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LukaMailMacApp.swift; sourceTree = "<group>"; };
@@ -144,7 +124,6 @@
 		09BD0324BD02A3C6C6D88A7B /* Models */ = {
 			isa = PBXGroup;
 			children = (
-				3235EB45E876471E606CAF67 /* AgentModels.swift */,
 				6880D53B16540BECB9471FF5 /* MailModels.swift */,
 			);
 			path = Models;
@@ -153,7 +132,6 @@
 		0BB65AE97D081E19D34B264C /* Shared */ = {
 			isa = PBXGroup;
 			children = (
-				B928EC06038C93DE17FCB238 /* DemoAgentServer.swift */,
 				E2E9D877C3E623D1B94CA7DD /* DemoMailServer.swift */,
 				7E431D3D0B4C956D15FC81C8 /* MailHTMLDocument.swift */,
 				D84EE94390FC6EDA90D023AF /* MailPresentation.swift */,
@@ -188,11 +166,18 @@
 		177165B0890D85A951391241 /* LukaMailTests */ = {
 			isa = PBXGroup;
 			children = (
-				E2225F77D67B282A316DA180 /* AgentTests.swift */,
 				D654F15A2E12B64F5331E4F5 /* LukaMailTests.swift */,
 				04F46A84C245FCA6FF07B22D /* MailHTMLDocumentTests.swift */,
 			);
 			path = LukaMailTests;
+			sourceTree = "<group>";
+		};
+		2CB9A67ADC037A60C2C16B39 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				DB938E937DC55991923103F9 /* Base.xcconfig */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 		3FA6096E03AFCDA6F5C4970A /* App */ = {
@@ -222,7 +207,6 @@
 		5E277C4410F8C0FE96D06F7C /* Stores */ = {
 			isa = PBXGroup;
 			children = (
-				B45F7B4DC94B3C189D858A90 /* AgentStore.swift */,
 				E998A32E330B5878DD7591A8 /* MailStore.swift */,
 			);
 			path = Stores;
@@ -236,21 +220,10 @@
 			path = App;
 			sourceTree = "<group>";
 		};
-		9E5527DCF4FE5E112A50263F /* Agent */ = {
-			isa = PBXGroup;
-			children = (
-				7C33E3BBF4FA787260F8FE4F /* AgentDraftCard.swift */,
-				A795E59230552DEF5157303C /* AgentMessageRow.swift */,
-				113DF06A133C7FD97484AB39 /* AgentView.swift */,
-				BF5761F29461ADC3CC187B53 /* MarkdownText.swift */,
-			);
-			path = Agent;
-			sourceTree = "<group>";
-		};
 		AFEB5ADCD5EA45592A2524E6 = {
 			isa = PBXGroup;
 			children = (
-				A1B2C3D4E5F60718293A4B5C /* Base.xcconfig */,
+				2CB9A67ADC037A60C2C16B39 /* Config */,
 				51DCC3A1FEE574366B15721D /* LukaMail */,
 				D585DBBEBF76F7E783A94F0E /* LukaMailMac */,
 				177165B0890D85A951391241 /* LukaMailTests */,
@@ -270,7 +243,6 @@
 				26F65A3224368D02B55219C1 /* SearchView.swift */,
 				7B43E7408E15AC5C6D233525 /* SenderAvatar.swift */,
 				6E83E0AFA8CC99F499F7937F /* SettingsView.swift */,
-				9E5527DCF4FE5E112A50263F /* Agent */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -499,13 +471,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				0CDC111C518FE5864E0DB285 /* APIClient.swift in Sources */,
-				4FC0CC0D08D46C309469E0A1 /* AgentDraftCard.swift in Sources */,
-				62E60B8FBFE399AC4AFF883A /* AgentMessageRow.swift in Sources */,
-				49338F3505F4836E14EDCE53 /* AgentModels.swift in Sources */,
-				EF5FAE0F99DAC8D81363EBDE /* AgentStore.swift in Sources */,
-				298EC1A106898808417D41E1 /* AgentView.swift in Sources */,
 				234BC052BC256E20AD8BFC0E /* ComposeView.swift in Sources */,
-				4742C0D769639635EED0844C /* DemoAgentServer.swift in Sources */,
 				C48AE64B7D742E7B6825862E /* DemoMailServer.swift in Sources */,
 				A728938F0A166353052659AD /* KeychainStore.swift in Sources */,
 				4CF3244945C53CFEF84FCBBB /* LukaMailApp.swift in Sources */,
@@ -517,7 +483,6 @@
 				A4B2C1E666AE2FD63AF6AE25 /* MailWebView.swift in Sources */,
 				5A215B614F44E9636D5E0C88 /* MailboxView.swift in Sources */,
 				7FEEB4FC086EE9BA21158117 /* MailboxesView.swift in Sources */,
-				F8667C3C84707C945258887A /* MarkdownText.swift in Sources */,
 				99F0AD372105422811F895C9 /* MessageBodyView.swift in Sources */,
 				694D95CC9E1AD22986BFB6C2 /* MessageDetailView.swift in Sources */,
 				5693857AF4334F2F60A7E760 /* NativeAuthSession.swift in Sources */,
@@ -533,7 +498,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E3D984103B9F8091C16BEE2C /* AgentTests.swift in Sources */,
 				CBBC1712CF0D4651B62362D6 /* LukaMailTests.swift in Sources */,
 				68EE00AA9CCB9DD648428128 /* MailHTMLDocumentTests.swift in Sources */,
 			);
@@ -543,7 +507,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				421E834967D9934AB31778A4 /* AgentTests.swift in Sources */,
 				47E8D320706CECCDEA726E24 /* LukaMailTests.swift in Sources */,
 				09CDDC1EDED5A8E61EA7F30F /* MailHTMLDocumentTests.swift in Sources */,
 			);
@@ -554,9 +517,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				DCE046F5EACEA85E87A892FE /* APIClient.swift in Sources */,
-				B65D2F2B6BA38E41D4A62E94 /* AgentModels.swift in Sources */,
-				17C76781111740787F4F5936 /* AgentStore.swift in Sources */,
-				D06F2E0267B80D32565F7079 /* DemoAgentServer.swift in Sources */,
 				51D6310EF842C4203013C017 /* DemoMailServer.swift in Sources */,
 				BD8EA6D46A6D9B7AFC7DE3F9 /* KeychainStore.swift in Sources */,
 				B5AB2977DDB6E0EB6E07DC14 /* LukaMailMacApp.swift in Sources */,
@@ -600,6 +560,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = LukaMail/LukaMail.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -648,7 +609,7 @@
 		};
 		19710F9405ECFB6077F20B37 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = A1B2C3D4E5F60718293A4B5C /* Base.xcconfig */;
+			baseConfigurationReference = DB938E937DC55991923103F9 /* Base.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -725,7 +686,7 @@
 		};
 		3DFA4AF9E331FC3C7A88D2E6 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = A1B2C3D4E5F60718293A4B5C /* Base.xcconfig */;
+			baseConfigurationReference = DB938E937DC55991923103F9 /* Base.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -843,6 +804,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = LukaMail/LukaMail.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;

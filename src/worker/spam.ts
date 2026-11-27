@@ -14,10 +14,12 @@ import type { Env } from "./types";
  * so correspondents are decided by the mailbox's own history.
  */
 export const TRUSTED_SENDER_SQL = `(EXISTS (SELECT 1 FROM identities i WHERE i.address = ?1)
-  OR EXISTS (SELECT 1 FROM contacts c WHERE c.address = ?1))`;
+  OR EXISTS (SELECT 1 FROM contacts c WHERE c.address = ?1 AND (?2 IS NULL OR c.identity_address = ?2)))`;
 
-export async function isTrustedSender(env: Env, senderAddress: string): Promise<boolean> {
-  const row = await env.DB.prepare(`SELECT ${TRUSTED_SENDER_SQL} AS trusted`).bind(senderAddress).first<{ trusted: number }>();
+export async function isTrustedSender(env: Env, senderAddress: string, identityAddress: string | null = null): Promise<boolean> {
+  const row = await env.DB.prepare(`SELECT ${TRUSTED_SENDER_SQL} AS trusted`)
+    .bind(senderAddress.toLowerCase(), identityAddress ? identityAddress.toLowerCase() : null)
+    .first<{ trusted: number }>();
   return Boolean(row?.trusted);
 }
 

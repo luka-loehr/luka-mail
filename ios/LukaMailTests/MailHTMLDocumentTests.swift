@@ -87,6 +87,37 @@ struct MailHTMLDocumentTests {
     }
 
     @Test
+    func stripsUntrustedBeaconTagsAndEnforcesHTTPSImagePolicy() {
+        let malicious = """
+        <link rel="dns-prefetch" href="//beacon.example.com">
+        <link rel="preconnect" href="https://beacon.example.com">
+        <meta http-equiv="refresh" content="0;url=https://evil.example.com">
+        <base href="https://evil.example.com/">
+        <script>alert(1)</script>
+        <iframe src="https://evil.example.com/frame"></iframe>
+        <p>Safe text</p>
+        <img srcset="https://cdn.example.com/1x.png 1x, https://cdn.example.com/2x.png 2x">
+        """
+        let blocked = MailHTMLDocument.make(source: .html(malicious), allowRemoteImages: false, isDark: false,
+                                            horizontalPadding: 16, verticalPadding: 4)
+        #expect(blocked.analysis.hasRemoteImages)
+        #expect(!blocked.html.contains("dns-prefetch"))
+        #expect(!blocked.html.contains("preconnect"))
+        #expect(!blocked.html.contains("http-equiv=\"refresh\""))
+        #expect(!blocked.html.contains("<base"))
+        #expect(!blocked.html.contains("<script"))
+        #expect(!blocked.html.contains("<iframe"))
+        #expect(blocked.html.contains("Safe text"))
+        #expect(MailHTMLDocument.contentBlockingRulesJSON(allowRemoteImages: false).contains("^https?://"))
+
+        let allowed = MailHTMLDocument.make(source: .html(malicious), allowRemoteImages: true, isDark: false,
+                                            horizontalPadding: 16, verticalPadding: 4)
+        #expect(allowed.html.contains("img-src https: data:;"))
+        #expect(!allowed.html.contains("http: data:"))
+        #expect(MailHTMLDocument.contentBlockingRulesJSON(allowRemoteImages: true).contains("^http://"))
+    }
+
+    @Test
     func parsesCSSColors() {
         #expect(CSSColor("#fff") == CSSColor(red: 1, green: 1, blue: 1))
         #expect(CSSColor("rgb(255, 0, 0)") == CSSColor(red: 1, green: 0, blue: 0))

@@ -67,7 +67,7 @@ const tokenBody = z.object({
   codeVerifier: z.string().regex(PKCE_VERIFIER),
 });
 
-export const nativeAuth = new Hono<{ Bindings: Env }>();
+export const nativeAuth = new Hono<{ Bindings: Env; Variables: { cspNonce?: string } }>();
 
 nativeAuth.get("/authorize", async (c) => {
   const name = appName(c.env);
@@ -76,8 +76,10 @@ nativeAuth.get("/authorize", async (c) => {
   const context = relyingParty(c.req.raw, c.env);
   if (!context) return authorizationErrorPage("Native authorization is unavailable on this host.", 400, name);
 
-  const credentials = await c.env.DB.prepare(`SELECT id, transports_json FROM webauthn_credentials
-    ORDER BY created_at`).all<{ id: string; transports_json: string }>();
+  const credentials = await c.env.DB.prepare(`SELECT wc.id, wc.transports_json FROM webauthn_credentials wc
+    JOIN api_keys k ON k.id = wc.key_id
+    WHERE k.revoked_at IS NULL AND (k.expires_at IS NULL OR datetime(k.expires_at) > datetime('now'))
+    ORDER BY wc.created_at`).all<{ id: string; transports_json: string }>();
   if (credentials.results.length === 0) {
     return authorizationErrorPage(`No passkey has been enrolled for ${name}.`, 409, name);
   }
@@ -104,7 +106,7 @@ nativeAuth.get("/authorize", async (c) => {
     `+${AUTHORIZATION_MINUTES} minutes`,
   ).run();
 
-  return c.html(authorizationPage(authorizationId, options, name));
+  return c.html(authorizationPage(authorizationId, options, name, c.get("cspNonce") ?? ""));
 });
 
 nativeAuth.post("/verify", async (c) => {
@@ -119,7 +121,7 @@ nativeAuth.post("/verify", async (c) => {
         wc.transports_json
       FROM webauthn_credentials wc JOIN api_keys k ON k.id = wc.key_id
       WHERE wc.id = ? AND k.revoked_at IS NULL
-        AND (k.expires_at IS NULL OR k.expires_at > CURRENT_TIMESTAMP)`).bind(responseId.data.id).first<CredentialRow>(),
+        AND (k.expires_at IS NULL OR datetime(k.expires_at) > datetime('now'))`).bind(responseId.data.id).first<CredentialRow>(),
   ]);
   const context = relyingParty(c.req.raw, c.env);
   if (!authorization || !credential || !context) {
@@ -175,14 +177,14 @@ nativeAuth.post("/token", async (c) => {
   const codeHash = await sha256(input.data.code);
   const code = await c.env.DB.prepare(`SELECT ac.* FROM native_authorization_codes ac
     JOIN api_keys k ON k.id = ac.key_id
-    WHERE ac.code_hash = ? AND ac.redirect_uri = ? AND ac.expires_at > CURRENT_TIMESTAMP
-      AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > CURRENT_TIMESTAMP)`)
+    WHERE ac.code_hash = ? AND ac.redirect_uri = ? AND datetime(ac.expires_at) > datetime('now')
+      AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR datetime(k.expires_at) > datetime('now'))`)
     .bind(codeHash, input.data.redirectUri).first<NativeAuthorizationCodeRow>();
   if (!code || !await constantTimeEqual(await sha256(input.data.codeVerifier), code.code_challenge)) {
     return c.json({ error: "Authorization code is invalid, expired, or PKCE verification failed" }, 400);
   }
   const parent = await c.env.DB.prepare(`SELECT * FROM api_keys WHERE id = ? AND revoked_at IS NULL
-    AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)`).bind(code.key_id).first<ApiKeyRow>();
+    AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))`).bind(code.key_id).first<ApiKeyRow>();
   if (!parent) return c.json({ error: "Authorization is no longer active" }, 400);
   const policy = await constrainedNativeSessionPolicy(c.env, parent);
   if (policy.scopes.length === 0 || policy.allowedIdentities.length === 0) {
@@ -218,15 +220,16 @@ nativeAuth.post("/logout", async (c) => {
 
 async function consumeAuthorizationRequest(env: Env, id: string): Promise<NativeAuthorizationRow | null> {
   const authorization = await env.DB.prepare(`SELECT * FROM native_authorization_requests
-    WHERE id = ? AND expires_at > CURRENT_TIMESTAMP`).bind(id).first<NativeAuthorizationRow>();
+    WHERE id = ? AND datetime(expires_at) > datetime('now')`).bind(id).first<NativeAuthorizationRow>();
   if (!authorization) return null;
   const deleted = await env.DB.prepare("DELETE FROM native_authorization_requests WHERE id = ? AND challenge = ?")
     .bind(id, authorization.challenge).run();
   return deleted.meta.changes === 1 ? authorization : null;
 }
 
-function authorizationPage(authorizationId: string, options: unknown, name: string): string {
+function authorizationPage(authorizationId: string, options: unknown, name: string, nonce: string): string {
   const safeName = escapeHtml(name);
+  const safeNonce = escapeHtml(nonce);
   const serializedName = safeScriptJson(name);
   const serializedId = safeScriptJson(authorizationId);
   const serializedOptions = safeScriptJson(options);
@@ -266,7 +269,7 @@ function authorizationPage(authorizationId: string, options: unknown, name: stri
     <p id="status" role="status">A private, revocable session is created for this app only.</p>
     <p id="error" role="alert"></p>
   </main>
-  <script>
+  <script nonce="${safeNonce}">
     const appName = ${serializedName};
     const authorizationId = ${serializedId};
     const options = ${serializedOptions};

@@ -3,6 +3,8 @@ const MAX_PAGE_BYTES = 512 * 1024;
 const MAX_MANIFEST_BYTES = 128 * 1024;
 const FETCH_TIMEOUT_MS = 6_000;
 const MAX_CANDIDATES = 16;
+const MAX_CONCURRENCY = 4;
+const MAX_REDIRECT_HOPS = 3;
 
 export interface LogoAsset {
   data: Uint8Array;
@@ -67,10 +69,10 @@ export async function discoverDomainLogo(domain: string, bimiLogo?: URL): Promis
   const ranked = [...unique.values()]
     .sort((left, right) => candidateHintScore(right) - candidateHintScore(left))
     .slice(0, MAX_CANDIDATES);
-  const results = await Promise.all(ranked.map(async (candidate) => {
+  const results = await mapConcurrent(ranked, MAX_CONCURRENCY, async (candidate) => {
     const asset = await fetchLogo(candidate.url, candidate.sourceType).catch(() => null);
     return asset ? { asset, candidate, score: assetScore(asset, candidate) } : null;
-  }));
+  });
   const best = results.filter((result): result is NonNullable<typeof result> => result !== null)
     .sort((left, right) => right.score - left.score)[0];
   return best ? { asset: best.asset, source: best.candidate.url } : null;
@@ -80,10 +82,17 @@ export function safeLogoSVG(data: Uint8Array, requireTinyPS = false): Uint8Array
   const text = new TextDecoder().decode(data);
   const normalized = text.toLowerCase();
   if (!/<svg\b/.test(normalized) || (requireTinyPS && !/baseprofile\s*=\s*["']tiny-ps["']/.test(normalized))) return null;
-  if (/<(?:script|foreignobject|iframe|object|embed|image)\b/.test(normalized)) return null;
+  if (/<(?:script|foreignobject|iframe|object|embed|image|animate|animatetransform|animatemotion|set)\b/.test(normalized)) return null;
   if (/\bon[a-z]+\s*=|<!doctype|<!entity|javascript\s*:|data\s*:|@import|expression\s*\(/.test(normalized)) return null;
+  if ([...normalized.matchAll(/<use\b/g)].length > 32) return null;
+  for (const styleBlock of normalized.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/g)) {
+    if (styleBlock[1].includes("\\") || /&#/.test(styleBlock[1])) return null;
+  }
+  for (const inlineStyle of normalized.matchAll(/\bstyle\s*=\s*["']([^"']*)["']/g)) {
+    if (inlineStyle[1].includes("\\") || /&#/.test(inlineStyle[1])) return null;
+  }
   const references = normalized.matchAll(/\b(?:href|xlink:href)\s*=\s*["']([^"']*)["']/g);
-  if ([...references].some((match) => !match[1].startsWith("#"))) return null;
+  if ([...references].some((match) => !match[1].startsWith("#") || /&#/.test(match[1]))) return null;
   const cssURLs = normalized.matchAll(/url\s*\(\s*["']?([^)'"\s]+)["']?\s*\)/g);
   if ([...cssURLs].some((match) => !match[1].startsWith("#"))) return null;
   return data;
@@ -123,12 +132,13 @@ function conventionalCandidates(domain: string): LogoCandidate[] {
 }
 
 async function discoverSite(root: URL): Promise<SiteDiscovery | null> {
-  const response = await fetch(root, { headers: { Accept: "text/html,application/xhtml+xml" }, redirect: "follow",
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-  if (!response.ok || !response.body || !safeHttpsURL(response.url)) return null;
+  const fetched = await safeFetch(root, { Accept: "text/html,application/xhtml+xml" });
+  if (!fetched) return null;
+  const { response, finalURL } = fetched;
+  if (!response.body) return null;
   const data = await readLimited(response.body, MAX_PAGE_BYTES);
   if (!data) return null;
-  return extractSiteDiscovery(new TextDecoder().decode(data), new URL(response.url));
+  return extractSiteDiscovery(new TextDecoder().decode(data), finalURL);
 }
 
 function extractSiteDiscovery(html: string, pageURL: URL): SiteDiscovery {
@@ -166,9 +176,10 @@ function extractSiteDiscovery(html: string, pageURL: URL): SiteDiscovery {
 }
 
 async function discoverManifest(url: URL): Promise<LogoCandidate[]> {
-  const response = await fetch(url, { headers: { Accept: "application/manifest+json,application/json" }, redirect: "follow",
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-  if (!response.ok || !response.body || !safeHttpsURL(response.url)) return [];
+  const fetched = await safeFetch(url, { Accept: "application/manifest+json,application/json" });
+  if (!fetched) return [];
+  const { response, finalURL } = fetched;
+  if (!response.body) return [];
   const data = await readLimited(response.body, MAX_MANIFEST_BYTES);
   if (!data) return [];
   let value: unknown;
@@ -176,7 +187,7 @@ async function discoverManifest(url: URL): Promise<LogoCandidate[]> {
   if (typeof value !== "object" || value === null || !("icons" in value) || !Array.isArray(value.icons)) return [];
   return value.icons.flatMap((icon) => {
     if (typeof icon !== "object" || icon === null || !("src" in icon) || typeof icon.src !== "string") return [];
-    const iconURL = resolveSafeURL(icon.src, new URL(response.url));
+    const iconURL = resolveSafeURL(icon.src, finalURL);
     if (!iconURL) return [];
     const sizes = "sizes" in icon && typeof icon.sizes === "string" ? sizeHint(icon.sizes) : 0;
     const type = "type" in icon && typeof icon.type === "string" ? icon.type : "";
@@ -186,9 +197,12 @@ async function discoverManifest(url: URL): Promise<LogoCandidate[]> {
 }
 
 async function fetchLogo(url: URL, sourceType: string, requireTinyPS = false): Promise<LogoAsset | null> {
-  const response = await fetch(url, { headers: { Accept: "image/svg+xml,image/avif,image/webp,image/png,image/jpeg,image/gif,image/x-icon,image/vnd.microsoft.icon;q=0.9" },
-    redirect: "follow", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-  if (!response.ok || !response.body || !safeHttpsURL(response.url)) return null;
+  const fetched = await safeFetch(url, {
+    Accept: "image/svg+xml,image/avif,image/webp,image/png,image/jpeg,image/gif,image/x-icon,image/vnd.microsoft.icon;q=0.9",
+  });
+  if (!fetched) return null;
+  const { response } = fetched;
+  if (!response.body) return null;
   const contentLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(contentLength) && contentLength > MAX_LOGO_BYTES) { await response.body.cancel(); return null; }
   const data = await readLimited(response.body, MAX_LOGO_BYTES);
@@ -310,11 +324,50 @@ export function safeHttpsURL(value: string | undefined): URL | null {
   if (!value) return null;
   try {
     const url = new URL(value);
-    const host = url.hostname.toLowerCase();
-    if (url.protocol !== "https:" || url.username || url.password || !host.includes(".") || host === "localhost" || host.endsWith(".local")
+    const host = url.hostname.toLowerCase().replace(/\.$/, "");
+    if (url.protocol !== "https:" || url.username || url.password || (url.port !== "" && url.port !== "443")
+      || !host.includes(".") || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")
+      || host.endsWith(".internal") || host.endsWith(".invalid") || host.endsWith(".arpa")
       || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.includes(":")) return null;
     return url;
   } catch { return null; }
+}
+
+async function safeFetch(initial: URL, headers: Record<string, string>): Promise<{ response: Response; finalURL: URL } | null> {
+  let current = safeHttpsURL(initial.toString());
+  if (!current) return null;
+  for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop += 1) {
+    const response = await fetch(current, { headers, redirect: "manual", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel();
+      if (hop === MAX_REDIRECT_HOPS) return null;
+      const location = response.headers.get("location");
+      if (!location) return null;
+      const next = resolveSafeURL(location, current);
+      if (!next) return null;
+      current = next;
+      continue;
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      return null;
+    }
+    return { response, finalURL: current };
+  }
+  return null;
+}
+
+async function mapConcurrent<T, R>(items: readonly T[], concurrency: number, worker: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await worker(items[index]!);
+    }
+  }));
+  return results;
 }
 
 async function readLimited(stream: ReadableStream<Uint8Array>, maximum: number): Promise<Uint8Array | null> {

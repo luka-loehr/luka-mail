@@ -46,26 +46,8 @@ final class DemoURLProtocol: URLProtocol, @unchecked Sendable {
                   let http = HTTPURLResponse(url: url, statusCode: response.status, httpVersion: "HTTP/1.1",
                                              headerFields: ["Content-Type": response.contentType]) else { return }
             self.client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
-            guard let chunks = response.chunks else {
-                self.client?.urlProtocol(self, didLoad: response.data)
-                self.client?.urlProtocolDidFinishLoading(self)
-                return
-            }
-            // A streamed answer arrives piece by piece, like the agent's NDJSON.
-            // One serial queue keeps the pieces in order, as a single connection would.
-            let queue = DispatchQueue(label: "com.example.lmail.demo-stream")
-            let start = DispatchTime.now()
-            for (index, chunk) in chunks.enumerated() {
-                queue.asyncAfter(deadline: start + Double(index + 1) * response.chunkInterval) { [weak self] in
-                    guard let self else { return }
-                    self.lock.lock()
-                    let isStopped = self.stopped
-                    self.lock.unlock()
-                    guard !isStopped else { return }
-                    self.client?.urlProtocol(self, didLoad: chunk)
-                    if index == chunks.count - 1 { self.client?.urlProtocolDidFinishLoading(self) }
-                }
-            }
+            self.client?.urlProtocol(self, didLoad: response.data)
+            self.client?.urlProtocolDidFinishLoading(self)
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + response.delay, execute: deliver)
     }
@@ -100,9 +82,6 @@ final class DemoMailServer: @unchecked Sendable {
         var contentType = "application/json"
         var data = Data()
         var delay: TimeInterval = 0.15
-        /// Delivered one after another instead of `data`, `chunkInterval` apart.
-        var chunks: [Data]?
-        var chunkInterval: TimeInterval = 0.06
     }
 
     private let lock = NSLock()
@@ -234,8 +213,8 @@ final class DemoMailServer: @unchecked Sendable {
             return json(LogoBackfillPage(processed: 0, nextCursor: nil))
         case ("PUT", 1, "push-devices", _, _):
             return json(PushDeviceResponse(registered: true, identities: Self.identities.map(\.address)))
-        case (_, _, "agent", _, _):
-            return DemoAgentServer.respond(method: method, route: route, body: body)
+        case ("DELETE", 1, "push-devices", _, _):
+            return json(PushDeviceRemovalResponse(removed: true))
         default:
             return Response(status: 404, data: Data(#"{"error":"Not found in demo server"}"#.utf8))
         }

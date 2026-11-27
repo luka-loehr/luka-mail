@@ -25,7 +25,7 @@ xcodebuild -project LukaMail.xcodeproj -scheme LukaMail -destination 'platform=i
 ## First-launch onboarding & Demo Mode
 
 - **Server URL setup**: On first launch, the Welcome screen prompts for your self-hosted lmail server hostname (for example, `mail.example.com`) and authenticates via WebAuthn passkey + PKCE in the system browser (`lmail://auth/callback`).
-- **Demo Mode**: Tapping **Try Demo Mailbox** on the Welcome screen starts an on-device demo server (`DemoMailServer` + `DemoAgentServer`) populated with synthetic messages, threads, drafts, and agent responses. No account or backend server is required, making the app immediately testable for new users and Apple App Review. You can exit Demo Mode anytime from Settings.
+- **Demo Mode**: Tapping **Try Demo Mailbox** on the Welcome screen starts an on-device demo server (`DemoMailServer`) populated with synthetic messages, threads, drafts, and contacts. No account or backend server is required, making the app immediately testable for new users and Apple App Review. You can exit Demo Mode anytime from Settings.
 
 ## Push notifications: self-built vs App Store builds
 

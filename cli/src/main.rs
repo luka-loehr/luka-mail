@@ -5,7 +5,7 @@ use reqwest::Method;
 use reqwest::blocking::{Client, Response};
 use serde_json::{Map, Value, json};
 use std::fs;
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -49,8 +49,6 @@ enum Command {
     Logout,
     Whoami,
     Summary,
-    #[command(about = "Run the mailbox agent (Workers AI) with a natural-language task")]
-    Agent(AgentArgs),
     #[command(subcommand)]
     Mail(MailCommand),
     #[command(subcommand)]
@@ -61,8 +59,6 @@ enum Command {
     Address(AddressCommand),
     #[command(subcommand)]
     External(ExternalCommand),
-    #[command(subcommand)]
-    Kg(KgCommand),
     #[command(
         subcommand,
         about = "The inbox autopilot: triage, rules, reply drafts, daily brief"
@@ -71,41 +67,6 @@ enum Command {
     #[command(subcommand)]
     Key(KeyCommand),
     Audit(PageArgs),
-}
-
-#[derive(Subcommand)]
-enum KgCommand {
-    #[command(about = "Knowledge-graph coverage: embeddings, gists, entities, relations")]
-    Status,
-    #[command(about = "Index pending messages into the knowledge graph")]
-    Sync(KgSyncArgs),
-}
-
-#[derive(Args)]
-struct KgSyncArgs {
-    #[arg(long, help = "Keep indexing batches until the queue is empty")]
-    full: bool,
-    #[arg(long, default_value_t = 25, value_parser = clap::value_parser!(u16).range(1..=100))]
-    max_messages: u16,
-}
-
-#[derive(Args)]
-struct AgentArgs {
-    #[arg(
-        required = true,
-        num_args = 1..,
-        help = "Natural-language task; quotes are optional (all words are joined)"
-    )]
-    prompt: Vec<String>,
-    #[arg(long, help = "Scope the agent to one mailbox identity")]
-    identity: Option<String>,
-    #[arg(
-        long,
-        help = "Continue a saved chat (its id is printed after every run)"
-    )]
-    chat: Option<String>,
-    #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u8).range(1..=16))]
-    max_steps: u8,
 }
 
 #[derive(Subcommand)]
@@ -612,6 +573,7 @@ impl Api {
     fn client(endpoint: &str, timeout_seconds: u64) -> Result<Client> {
         Client::builder()
             .timeout(Duration::from_secs(timeout_seconds))
+            .redirect(reqwest::redirect::Policy::none())
             .user_agent(concat!("lmail/", env!("CARGO_PKG_VERSION")))
             .https_only(endpoint.starts_with("https://"))
             .build()
@@ -622,8 +584,7 @@ impl Api {
         self.send(&self.client, method, path, body)
     }
 
-    // Agent runs and external sync batches legitimately exceed the default
-    // request timeout; give them their own patient client.
+    // External sync batches legitimately exceed the default request timeout.
     fn request_slow(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Response> {
         self.send(&Self::client(&self.endpoint, 320)?, method, path, body)
     }
@@ -697,6 +658,9 @@ fn normalize_endpoint(endpoint: &str) -> Result<String> {
     if url.query().is_some() || url.fragment().is_some() {
         bail!("invalid endpoint {endpoint:?}: it must not contain a query or fragment");
     }
+    if url.path() != "/" && !url.path().is_empty() {
+        bail!("invalid endpoint {endpoint:?}: it must be an origin without a path");
+    }
     Ok(endpoint.to_owned())
 }
 
@@ -763,7 +727,40 @@ fn api_error(
     if let Some(request_id) = request_id {
         line.push_str(&format!(" (request {request_id})"));
     }
-    anyhow!(redact(&line, token))
+    anyhow!(sanitize_terminal_text(&redact(&line, token)))
+}
+
+fn sanitize_terminal_text(text: &str) -> String {
+    text.chars()
+        .map(|ch| {
+            if ch == '\t' {
+                ' '
+            } else if ch.is_control()
+                || ('\u{007f}'..='\u{009f}').contains(&ch)
+                || ('\u{202a}'..='\u{202e}').contains(&ch)
+                || ('\u{2066}'..='\u{2069}').contains(&ch)
+            {
+                '\u{fffd}'
+            } else {
+                ch
+            }
+        })
+        .collect()
+}
+
+fn escape_json_terminal_hazards(json_text: &str) -> String {
+    let mut out = String::with_capacity(json_text.len());
+    for ch in json_text.chars() {
+        if ('\u{007f}'..='\u{009f}').contains(&ch)
+            || ('\u{202a}'..='\u{202e}').contains(&ch)
+            || ('\u{2066}'..='\u{2069}').contains(&ch)
+        {
+            out.push_str(&format!("\\u{:04x}", ch as u32));
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 fn redact(text: &str, token: Option<&str>) -> String {
@@ -885,17 +882,9 @@ fn run() -> Result<()> {
             let api = Api::new(&endpoint, &cli.profile, true, cli.confirm_admin)?;
             watch_mailbox(&api, args, cli.json)
         }
-        Command::Agent(args) => {
-            let api = Api::new(&endpoint, &cli.profile, true, cli.confirm_admin)?;
-            run_agent(&api, args, cli.json)
-        }
         Command::External(command) => {
             let api = Api::new(&endpoint, &cli.profile, true, cli.confirm_admin)?;
             execute_external(&api, command, cli.json)
-        }
-        Command::Kg(command) => {
-            let api = Api::new(&endpoint, &cli.profile, true, cli.confirm_admin)?;
-            execute_kg(&api, command, cli.json)
         }
         command => {
             let administrative = is_administrative(&command);
@@ -942,6 +931,24 @@ fn valid_mta_sts_policy(body: &str) -> bool {
         && max_age_valid.is_some()
 }
 
+fn safe_mta_sts_policy_url(raw: &str) -> Option<reqwest::Url> {
+    let url = reqwest::Url::parse(raw).ok()?;
+    let host = url.host_str()?.to_ascii_lowercase();
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+        || !host.starts_with("mta-sts.")
+        || !host["mta-sts.".len()..].contains('.')
+        || url.path() != "/.well-known/mta-sts.txt"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    Some(url)
+}
+
 fn validate_public_mta_sts(client: &Client, report: &mut Value) {
     let mut all_ok = true;
     let policy_urls = report
@@ -962,11 +969,20 @@ fn validate_public_mta_sts(client: &Client, report: &mut Value) {
             .map(|url| {
                 scope.spawn(move || {
                     url.as_deref()
+                        .and_then(safe_mta_sts_policy_url)
                         .and_then(|url| {
                             client.get(url).timeout(Duration::from_secs(10)).send().ok()
                         })
                         .filter(|response| response.status().is_success())
-                        .and_then(|response| response.text().ok())
+                        .and_then(|response| {
+                            let mut body = String::new();
+                            response
+                                .take(64 * 1024 + 1)
+                                .read_to_string(&mut body)
+                                .ok()
+                                .filter(|&bytes| bytes <= 64 * 1024)
+                                .map(|_| body)
+                        })
                         .is_some_and(|body| valid_mta_sts_policy(&body))
                 })
             })
@@ -1069,9 +1085,7 @@ fn execute_authenticated(api: &Api, command: Command) -> Result<Value> {
         | Command::Deliverability(_)
         | Command::Login
         | Command::Logout
-        | Command::Agent(_)
-        | Command::External(_)
-        | Command::Kg(_) => unreachable!(),
+        | Command::External(_) => unreachable!(),
     }
 }
 
@@ -1159,501 +1173,6 @@ fn execute_autopilot(api: &Api, command: AutopilotCommand) -> Result<Value> {
         ),
         AutopilotCommand::Brief => api.json(Method::POST, "/v1/autopilot/brief", None),
         AutopilotCommand::Sweep => api.json(Method::POST, "/v1/autopilot/sweep", None),
-    }
-}
-
-fn execute_kg(api: &Api, command: KgCommand, compact: bool) -> Result<()> {
-    match command {
-        KgCommand::Status => print_value(&api.json(Method::GET, "/v1/kg/status", None)?, compact),
-        KgCommand::Sync(args) => {
-            let mut rounds = 0usize;
-            loop {
-                rounds += 1;
-                let mut body = Map::new();
-                body.insert("maxMessages".into(), Value::from(args.max_messages));
-                let report =
-                    api.json_slow(Method::POST, "/v1/kg/sync", Some(&Value::Object(body)))?;
-                let done = report.get("done").and_then(Value::as_bool).unwrap_or(false);
-                let embedded = report.get("embedded").and_then(Value::as_u64).unwrap_or(0);
-                let extracted = report.get("extracted").and_then(Value::as_u64).unwrap_or(0);
-                let remaining = report.get("remaining").and_then(Value::as_u64).unwrap_or(0);
-                if args.full && !compact {
-                    eprintln!(
-                        "batch {rounds}: {embedded} embedded, {extracted} extracted, {remaining} remaining"
-                    );
-                }
-                if !args.full || done || rounds >= 300 {
-                    return print_value(&report, compact);
-                }
-                if embedded == 0 && extracted == 0 {
-                    print_value(&report, compact)?;
-                    bail!("knowledge-graph sync is not making progress; inspect the report above");
-                }
-            }
-        }
-    }
-}
-
-fn run_agent(api: &Api, args: AgentArgs, compact: bool) -> Result<()> {
-    let mut body = Map::new();
-    body.insert("prompt".into(), Value::String(args.prompt.join(" ")));
-    if let Some(identity) = args.identity {
-        body.insert("identity".into(), Value::String(identity));
-    }
-    body.insert("maxSteps".into(), Value::from(args.max_steps));
-    if let Some(chat) = &args.chat {
-        body.insert("chatId".into(), Value::String(chat.clone()));
-    }
-    if compact {
-        let value = api.json_slow(Method::POST, "/v1/agent", Some(&Value::Object(body)))?;
-        return print_value(&value, true);
-    }
-    body.insert("stream".into(), Value::Bool(true));
-    let response = api.request_slow(Method::POST, "/v1/agent", Some(&Value::Object(body)))?;
-    let outcome = stream_agent_events(response)?;
-    offer_drafts(api, &outcome)
-}
-
-/// What a streamed agent turn left behind: its chat and the emails it proposed.
-#[derive(Default)]
-struct AgentOutcome {
-    chat_id: Option<String>,
-    drafts: Vec<Value>,
-}
-
-/// The agent never sends. Each email it proposed is shown in full and sent
-/// only when the owner types "y" for it.
-fn offer_drafts(api: &Api, outcome: &AgentOutcome) -> Result<()> {
-    let Some(chat_id) = &outcome.chat_id else {
-        return Ok(());
-    };
-    let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
-    for draft in &outcome.drafts {
-        let field = |name: &str| {
-            draft
-                .get(name)
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned()
-        };
-        let list = |name: &str| {
-            draft
-                .get(name)
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default()
-        };
-        let (to, cc) = (list("to"), list("cc"));
-        println!();
-        println!(
-            "┌─ Email draft {}",
-            field("id").chars().take(8).collect::<String>()
-        );
-        println!("│ From:    {}", field("from"));
-        println!("│ To:      {to}");
-        if !cc.is_empty() {
-            println!("│ Cc:      {cc}");
-        }
-        println!("│ Subject: {}", field("subject"));
-        println!("│");
-        for line in field("body").lines() {
-            println!("│ {line}");
-        }
-        println!("└─");
-        if !interactive {
-            continue;
-        }
-        print!("Send this email to {to}? [y/N] ");
-        io::stdout().flush()?;
-        let mut answer = String::new();
-        io::stdin().read_line(&mut answer)?;
-        if !matches!(answer.trim(), "y" | "Y" | "yes" | "ja" | "j") {
-            println!("Not sent. It stays in the chat; open it in the Mail app to edit and send.");
-            continue;
-        }
-        let sent = api.json_slow(
-            Method::POST,
-            &format!(
-                "/v1/agent/chats/{}/drafts/{}/send",
-                urlencoding::encode(chat_id),
-                urlencoding::encode(&field("id"))
-            ),
-            Some(&json!({ "idempotencyKey": Uuid::new_v4().to_string() })),
-        )?;
-        if sent.get("sent").and_then(Value::as_bool) == Some(true) {
-            println!("Sent to {to}.");
-        } else {
-            println!(
-                "Not sent: {}",
-                sent.get("error")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown error")
-            );
-        }
-    }
-    println!("Chat {chat_id}: continue with lmail agent --chat {chat_id} \"…\"");
-    Ok(())
-}
-
-// Live agent rendering with strict block spacing: a reasoning block, one
-// blank line, the batch of tool calls/results, one blank line, and so on;
-// the answer arrives in the default color, the footer dimmed. Newline runs
-// inside streamed text are capped at a single paragraph break.
-#[derive(PartialEq, Clone, Copy)]
-enum Block {
-    None,
-    Reasoning,
-    Tools,
-    Answer,
-}
-
-struct AgentUi {
-    color: bool,
-    spinner_drawn: bool,
-    waiting: bool,
-    line_open: bool,
-    last_block: Block,
-    newline_run: usize,
-    printed_in_block: bool,
-    started: Instant,
-}
-
-impl AgentUi {
-    fn new(color: bool) -> Self {
-        Self {
-            color,
-            spinner_drawn: false,
-            waiting: true,
-            line_open: false,
-            last_block: Block::None,
-            newline_run: 0,
-            printed_in_block: false,
-            started: Instant::now(),
-        }
-    }
-
-    fn paint<'a>(&self, code: &'a str) -> &'a str {
-        if self.color { code } else { "" }
-    }
-
-    // In color mode a line-oriented write starts by claiming column 0 and
-    // clearing the row, so spinner remnants or ghost cells can never merge
-    // into printed lines.
-    fn line_start(&self) -> &'static str {
-        if self.color { "\r\x1b[2K" } else { "" }
-    }
-
-    fn clear_spinner(&mut self, out: &mut impl Write) -> Result<()> {
-        if self.spinner_drawn {
-            write!(out, "\r\x1b[2K")?;
-            self.spinner_drawn = false;
-        }
-        Ok(())
-    }
-
-    fn draw_spinner(&mut self, frame: &str) -> Result<()> {
-        // Never break an unfinished text line just to show the spinner.
-        if !self.color || !self.waiting || self.line_open {
-            return Ok(());
-        }
-        let mut out = io::stdout();
-        let grey = self.paint("\x1b[90m");
-        let reset = self.paint("\x1b[0m");
-        write!(
-            out,
-            "\r\x1b[2K{grey}{frame} thinking… {}s{reset}",
-            self.started.elapsed().as_secs()
-        )?;
-        out.flush()?;
-        self.spinner_drawn = true;
-        Ok(())
-    }
-
-    fn begin_event(&mut self, out: &mut impl Write) -> Result<()> {
-        self.waiting = false;
-        self.clear_spinner(out)
-    }
-
-    fn close_line(&mut self, out: &mut impl Write) -> Result<()> {
-        if self.line_open {
-            writeln!(out)?;
-            self.line_open = false;
-        }
-        Ok(())
-    }
-
-    // Exactly one blank line between blocks, none inside a block.
-    fn start_block(&mut self, out: &mut impl Write, block: Block) -> Result<()> {
-        if self.last_block == block {
-            return Ok(());
-        }
-        self.close_line(out)?;
-        if self.last_block != Block::None {
-            writeln!(out)?;
-        }
-        self.last_block = block;
-        self.newline_run = 0;
-        self.printed_in_block = false;
-        Ok(())
-    }
-
-    // Drop leading newlines in a block and cap runs at one paragraph break.
-    fn filter_text(&mut self, text: &str) -> String {
-        let mut cleaned = String::with_capacity(text.len());
-        for character in text.chars() {
-            match character {
-                '\r' => {}
-                '\n' => {
-                    self.newline_run += 1;
-                    if self.printed_in_block && self.newline_run <= 2 {
-                        cleaned.push('\n');
-                    }
-                }
-                _ => {
-                    self.newline_run = 0;
-                    self.printed_in_block = true;
-                    cleaned.push(character);
-                }
-            }
-        }
-        cleaned
-    }
-
-    fn write_stream_text(&mut self, out: &mut impl Write, text: &str) -> Result<()> {
-        let cleaned = self.filter_text(text);
-        if cleaned.is_empty() {
-            return Ok(());
-        }
-        write!(out, "{cleaned}")?;
-        self.line_open = !cleaned.ends_with('\n');
-        out.flush()?;
-        Ok(())
-    }
-}
-
-fn stream_agent_events(response: Response) -> Result<AgentOutcome> {
-    let color = io::stdout().is_terminal();
-    let ui = std::sync::Arc::new(std::sync::Mutex::new(AgentUi::new(color)));
-    let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let spinner_ui = ui.clone();
-    let spinner_done = finished.clone();
-    let spinner = thread::spawn(move || {
-        let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        let mut index = 0usize;
-        while !spinner_done.load(std::sync::atomic::Ordering::Relaxed) {
-            if let Ok(mut ui) = spinner_ui.lock() {
-                let _ = ui.draw_spinner(frames[index % frames.len()]);
-            }
-            index += 1;
-            thread::sleep(Duration::from_millis(250));
-        }
-    });
-
-    let result = render_agent_stream(response, &ui);
-    finished.store(true, std::sync::atomic::Ordering::Relaxed);
-    let _ = spinner.join();
-    if let Ok(mut ui) = ui.lock() {
-        let mut out = io::stdout();
-        let _ = ui.clear_spinner(&mut out);
-        let _ = ui.close_line(&mut out);
-    }
-    result
-}
-
-fn render_agent_stream(response: Response, ui: &std::sync::Mutex<AgentUi>) -> Result<AgentOutcome> {
-    let mut outcome = AgentOutcome::default();
-    let mut reader = io::BufReader::new(response);
-    let mut line = String::new();
-    let mut pending_calls: std::collections::HashMap<String, Vec<Instant>> =
-        std::collections::HashMap::new();
-    loop {
-        line.clear();
-        if io::BufRead::read_line(&mut reader, &mut line)? == 0 {
-            break;
-        }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(event) = serde_json::from_str::<Value>(trimmed) else {
-            continue;
-        };
-        let kind = event
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        let mut ui = ui.lock().map_err(|_| anyhow!("agent UI lock poisoned"))?;
-        let mut out = io::stdout();
-        if kind == "heartbeat" {
-            ui.waiting = true;
-            continue;
-        }
-        ui.begin_event(&mut out)?;
-        let grey = ui.paint("\x1b[90m").to_owned();
-        let cyan = ui.paint("\x1b[36m").to_owned();
-        let green = ui.paint("\x1b[32m").to_owned();
-        let red = ui.paint("\x1b[31m").to_owned();
-        let bold = ui.paint("\x1b[1m").to_owned();
-        let reset = ui.paint("\x1b[0m").to_owned();
-        match kind.as_str() {
-            "reasoning" => {
-                let text = event.get("text").and_then(Value::as_str).unwrap_or("");
-                // Whitespace-only deltas must not flap the block state: that
-                // produced stray blank lines between tool calls.
-                if ui.last_block != Block::Reasoning && text.trim().is_empty() {
-                    continue;
-                }
-                ui.start_block(&mut out, Block::Reasoning)?;
-                let cleaned = ui.filter_text(text);
-                if !cleaned.is_empty() {
-                    write!(out, "{grey}{cleaned}{reset}")?;
-                    ui.line_open = !cleaned.ends_with('\n');
-                    out.flush()?;
-                }
-            }
-            "tool-call" => {
-                ui.start_block(&mut out, Block::Tools)?;
-                let tool = event.get("tool").and_then(Value::as_str).unwrap_or("?");
-                let input = event
-                    .get("input")
-                    .map(|value| serde_json::to_string(value).unwrap_or_default())
-                    .unwrap_or_default();
-                let shown = if input.chars().count() > 140 {
-                    let cut: String = input.chars().take(140).collect();
-                    format!("{cut}…")
-                } else {
-                    input
-                };
-                pending_calls
-                    .entry(tool.to_owned())
-                    .or_default()
-                    .push(Instant::now());
-                let ls = ui.line_start();
-                writeln!(
-                    out,
-                    "{ls}{cyan}▸{reset} {bold}{tool}{reset} {grey}{shown}{reset}"
-                )?;
-                out.flush()?;
-            }
-            "tool-result" | "tool-error" => {
-                ui.start_block(&mut out, Block::Tools)?;
-                let tool = event.get("tool").and_then(Value::as_str).unwrap_or("?");
-                let elapsed = pending_calls
-                    .get_mut(tool)
-                    .and_then(|starts| (!starts.is_empty()).then(|| starts.remove(0)))
-                    .map(|start| format!(" ({:.1}s)", start.elapsed().as_secs_f32()))
-                    .unwrap_or_default();
-                let ls = ui.line_start();
-                if kind == "tool-result" {
-                    writeln!(out, "{ls}{green}✓{reset} {grey}{tool}{elapsed}{reset}")?;
-                } else {
-                    let error = event.get("error").and_then(Value::as_str).unwrap_or("?");
-                    writeln!(out, "{ls}{red}✗ {tool}: {error}{reset}")?;
-                }
-                out.flush()?;
-            }
-            "text" => {
-                let text = event.get("text").and_then(Value::as_str).unwrap_or("");
-                if ui.last_block != Block::Answer && text.trim().is_empty() {
-                    continue;
-                }
-                ui.start_block(&mut out, Block::Answer)?;
-                ui.write_stream_text(&mut out, text)?;
-            }
-            "finish" => {
-                ui.close_line(&mut out)?;
-                let tool_calls = event.get("toolCalls").and_then(Value::as_u64).unwrap_or(0);
-                let model = event.get("model").and_then(Value::as_str).unwrap_or("?");
-                let input_tokens = event
-                    .pointer("/usage/inputTokens")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                let output_tokens = event
-                    .pointer("/usage/outputTokens")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                let neurons = event.get("neurons").and_then(Value::as_f64).unwrap_or(0.0);
-                let cost_usd = event.get("costUsd").and_then(Value::as_f64).unwrap_or(0.0);
-                let used_today = event
-                    .pointer("/dailyNeurons/usedToday")
-                    .and_then(Value::as_f64)
-                    .unwrap_or(0.0);
-                let free_daily = event
-                    .pointer("/dailyNeurons/freeDaily")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(10_000);
-                let seconds = ui.started.elapsed().as_secs_f32();
-                writeln!(
-                    out,
-                    "{grey}── {tool_calls} tool call(s) · {} in / {} out tok · {} neurons · ${cost_usd:.4} · {seconds:.1}s · {model}{reset}",
-                    humanize_tokens(input_tokens),
-                    humanize_tokens(output_tokens),
-                    group_thousands(neurons.round() as u64)
-                )?;
-                writeln!(
-                    out,
-                    "{grey}   today: {} / {} free neurons used (resets 00:00 UTC){reset}",
-                    group_thousands(used_today.round() as u64),
-                    group_thousands(free_daily)
-                )?;
-                out.flush()?;
-            }
-            "error" => {
-                ui.close_line(&mut out)?;
-                let message = event
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown");
-                writeln!(out, "{red}✗ agent error: {message}{reset}")?;
-                bail!("agent error: {message}");
-            }
-            "chat" => {
-                outcome.chat_id = event
-                    .get("chatId")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-            }
-            "draft" => {
-                if let Some(draft) = event.get("draft") {
-                    outcome.drafts.retain(|existing| {
-                        existing.get("id") != draft.get("revisesDraftId")
-                            || draft.get("revisesDraftId").is_none()
-                    });
-                    outcome.drafts.push(draft.clone());
-                }
-            }
-            _ => {}
-        }
-    }
-    Ok(outcome)
-}
-
-fn group_thousands(value: u64) -> String {
-    let digits = value.to_string();
-    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
-    for (index, character) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            grouped.push(',');
-        }
-        grouped.push(character);
-    }
-    grouped
-}
-
-fn humanize_tokens(count: u64) -> String {
-    if count >= 10_000 {
-        format!("{:.0}k", count as f64 / 1_000.0)
-    } else if count >= 1_000 {
-        format!("{:.1}k", count as f64 / 1_000.0)
-    } else {
-        count.to_string()
     }
 }
 
@@ -2509,26 +2028,66 @@ fn read_credential_store() -> Result<Map<String, Value>> {
 // system keychain: equivalent single-user protection without ACL prompts on
 // every rebuilt binary.
 fn write_credential_store(store: &Map<String, Value>) -> Result<()> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let path = credentials_path()?;
     let directory = path
         .parent()
         .ok_or_else(|| anyhow!("credentials path has no parent directory"))?;
     fs::create_dir_all(directory)
         .with_context(|| format!("failed to create {}", directory.display()))?;
-    fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
-        .with_context(|| format!("failed to restrict {}", directory.display()))?;
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&path)
-        .with_context(|| format!("failed to write {}", path.display()))?;
-    file.write_all(serde_json::to_string_pretty(&Value::Object(store.clone()))?.as_bytes())
-        .with_context(|| format!("failed to write {}", path.display()))?;
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("failed to restrict {}", path.display()))
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("failed to restrict {}", directory.display()))?;
+    }
+    let payload = serde_json::to_string_pretty(&Value::Object(store.clone()))?;
+    write_private_file_atomic(&path, payload.as_bytes())
+}
+
+fn write_private_file_atomic(target: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = target
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    let temp_name = format!(
+        ".{}.tmp-{}",
+        target
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("lmail"),
+        Uuid::new_v4()
+    );
+    let temp_path = parent.join(temp_name);
+    let write_result = (|| -> Result<()> {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&temp_path)
+            .with_context(|| format!("failed to create {}", temp_path.display()))?;
+        file.write_all(bytes)
+            .with_context(|| format!("failed to write {}", temp_path.display()))?;
+        file.sync_all()
+            .with_context(|| format!("failed to flush {}", temp_path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&temp_path, fs::Permissions::from_mode(0o600))
+                .with_context(|| format!("failed to restrict {}", temp_path.display()))?;
+        }
+        fs::rename(&temp_path, target)
+            .with_context(|| format!("failed to finalize {}", target.display()))?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    write_result
 }
 
 fn read_body(body: Option<String>, body_file: Option<PathBuf>) -> Result<String> {
@@ -2563,16 +2122,17 @@ fn download(api: &Api, path: &str, output: &Path) -> Result<Value> {
         .request(Method::GET, path, None)?
         .bytes()
         .context("failed to read the download from the mail API")?;
-    fs::write(output, &bytes).with_context(|| format!("failed to write {}", output.display()))?;
+    write_private_file_atomic(output, &bytes)?;
     Ok(json!({ "saved": true, "path": output, "bytes": bytes.len() }))
 }
 
 fn print_value(value: &Value, compact: bool) -> Result<()> {
-    let text = if compact {
+    let raw = if compact {
         serde_json::to_string(value)?
     } else {
         serde_json::to_string_pretty(value)?
     };
+    let text = escape_json_terminal_hazards(&raw);
     let mut out = io::stdout().lock();
     writeln!(out, "{text}")?;
     Ok(())
@@ -2930,28 +2490,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_agent_command_continuing_a_chat() {
-        let cli = Cli::try_parse_from([
-            "lmail",
-            "agent",
-            "summarize today's unread mail",
-            "--identity",
-            "alice@example.org",
-            "--chat",
-            "6f1d2c3b",
-            "--max-steps",
-            "12",
-        ])
-        .expect("agent command should parse");
-        let Command::Agent(args) = cli.command else {
-            panic!("expected agent command")
-        };
-        assert_eq!(args.prompt.join(" "), "summarize today's unread mail");
-        assert_eq!(args.chat.as_deref(), Some("6f1d2c3b"));
-        assert_eq!(args.max_steps, 12);
-    }
-
-    #[test]
     fn parses_full_external_sync() {
         let cli = Cli::try_parse_from([
             "lmail",
@@ -3136,5 +2674,41 @@ mod tests {
     #[test]
     fn encodes_path_segments() {
         assert_eq!(segment("../keys/1"), "..%2Fkeys%2F1");
+    }
+
+    #[test]
+    fn rejects_endpoint_paths_and_unsafe_mta_sts_urls() {
+        assert!(normalize_endpoint("https://mail.example.com/subpath").is_err());
+        assert!(
+            safe_mta_sts_policy_url("https://mta-sts.example.com/.well-known/mta-sts.txt")
+                .is_some()
+        );
+        assert!(
+            safe_mta_sts_policy_url("http://mta-sts.example.com/.well-known/mta-sts.txt").is_none()
+        );
+        assert!(
+            safe_mta_sts_policy_url("https://evil.example.com/.well-known/mta-sts.txt").is_none()
+        );
+        assert!(
+            safe_mta_sts_policy_url("https://mta-sts.example.com:8443/.well-known/mta-sts.txt")
+                .is_none()
+        );
+        assert!(safe_mta_sts_policy_url("https://mta-sts.example.com/other").is_none());
+    }
+
+    #[test]
+    fn neutralizes_terminal_escape_and_bidi_sequences() {
+        let spoofed = "bad\x1b]52;c;SGVsbG8=\x07\u{009b}31m\u{202e}evil";
+        let sanitized = sanitize_terminal_text(spoofed);
+        assert!(!sanitized.contains('\x1b'));
+        assert!(!sanitized.contains('\u{009b}'));
+        assert!(!sanitized.contains('\u{202e}'));
+
+        let json_escaped =
+            escape_json_terminal_hazards("{\"subject\":\"\u{009b}31m\u{202e}spoof\"}");
+        assert!(json_escaped.contains("\\u009b"));
+        assert!(json_escaped.contains("\\u202e"));
+        assert!(!json_escaped.contains('\u{009b}'));
+        assert!(!json_escaped.contains('\u{202e}'));
     }
 }

@@ -7,12 +7,20 @@ export default tseslint.config(
     ignores: [
       "dist",
       ".wrangler",
+      "security-reviews",
       "src/worker/worker-configuration.d.ts",
     ],
   },
   { languageOptions: { parserOptions: { tsconfigRootDir: import.meta.dirname } } },
   js.configs.recommended,
   ...tseslint.configs.recommended,
+  {
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      globals: { ...globals.node },
+    },
+  },
   {
     files: ["**/*.{ts,tsx}"],
     languageOptions: {

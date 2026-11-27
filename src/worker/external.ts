@@ -3,6 +3,7 @@
 // the external server is the receiving transport, this store is the operating copy.
 
 import PostalMime from "postal-mime";
+import { senderPassedMailAuth } from "./bimi";
 import { sha256, stableId } from "./crypto";
 import { cleanHeader, findThreadForReply, normalizeAddresses, prepareAttachment, preview } from "./inbound";
 import { ImapClient, connectTlsTransport, parseInternalDate, type ImapFolder, type ImapTransport } from "./imap";
@@ -18,6 +19,7 @@ const SKIPPED_FOLDERS = new Set(["\\drafts", "\\junk", "\\noselect", "\\nonexist
 
 export interface ExternalSyncOptions {
   identity?: string;
+  allowedIdentities?: string[] | null;
   maxMessages?: number;
   deadlineMs?: number;
   openImap?: (host: string, port: number) => Promise<ImapTransport>;
@@ -62,10 +64,24 @@ export function externalPassword(env: Env, account: ExternalAccountRow): string 
 export async function runExternalSync(env: Env, options: ExternalSyncOptions = {}): Promise<ExternalSyncReport> {
   const deadline = Date.now() + (options.deadlineMs ?? 60_000);
   const budget = { remaining: Math.max(1, Math.min(options.maxMessages ?? 40, 200)) };
+  const allowed = options.allowedIdentities ?? null;
+  if (allowed !== null && allowed.length === 0) {
+    return { accounts: [], done: true, syncedMessages: 0, skippedMessages: 0 };
+  }
+  const bindings: string[] = [];
+  let filterSql = "";
+  if (options.identity) {
+    filterSql += " AND ea.identity_address = ?";
+    bindings.push(options.identity);
+  }
+  if (allowed !== null) {
+    filterSql += ` AND ea.identity_address IN (${allowed.map(() => "?").join(",")})`;
+    bindings.push(...allowed);
+  }
   const accountsResult = await env.DB.prepare(`SELECT ea.* FROM external_accounts ea
     JOIN identities i ON i.address = ea.identity_address
-    WHERE ea.enabled = 1 AND i.enabled = 1 ${options.identity ? "AND ea.identity_address = ?" : ""}
-    ORDER BY ea.identity_address`).bind(...(options.identity ? [options.identity] : [])).all<ExternalAccountRow>();
+    WHERE ea.enabled = 1 AND i.enabled = 1${filterSql}
+    ORDER BY ea.identity_address`).bind(...bindings).all<ExternalAccountRow>();
   const report: ExternalSyncReport = { accounts: [], done: true, syncedMessages: 0, skippedMessages: 0 };
   for (const account of accountsResult.results) {
     const accountReport = await syncAccount(env, account, budget, deadline, options.openImap ?? connectTlsTransport);
@@ -216,17 +232,19 @@ export async function ingestExternalMessage(env: Env, input: ExternalIngestInput
   if (existing) return false;
 
   const parsed = await new PostalMime().parse(rawBuffer);
+  const identityAddress = input.identity.toLowerCase();
   const parsedMessageId = cleanHeader(parsed.messageId, 998) || null;
   if (parsedMessageId) {
-    const collision = await env.DB.prepare("SELECT id FROM messages WHERE message_id = ? LIMIT 1").bind(parsedMessageId).first();
+    const collision = await env.DB.prepare("SELECT id FROM messages WHERE identity_address = ? AND message_id = ? LIMIT 1")
+      .bind(identityAddress, parsedMessageId).first();
     if (collision) return false;
   }
-  const sender = normalizeAddresses(parsed.from)[0] ?? { address: input.identity };
+  const sender = normalizeAddresses(parsed.from)[0] ?? { address: identityAddress };
   const recipients = normalizeAddresses(parsed.to);
   const cc = normalizeAddresses(parsed.cc);
   const parsedInReplyTo = cleanHeader(parsed.inReplyTo, 998) || null;
   const threadId = parsedInReplyTo
-    ? await findThreadForReply(env, parsedInReplyTo, input.identity, parsedMessageId ?? id)
+    ? await findThreadForReply(env, parsedInReplyTo, identityAddress, parsedMessageId ?? id)
     : await stableId(parsedMessageId ?? id);
   const receivedAt = parsed.date && !Number.isNaN(new Date(parsed.date).valueOf())
     ? new Date(parsed.date).toISOString()
@@ -237,15 +255,18 @@ export async function ingestExternalMessage(env: Env, input: ExternalIngestInput
   // New inbox mail goes through the autopilot before it is written, so the
   // push and the inbox already reflect the verdict. Backfilled history does not.
   const senderAddress = cleanHeader(sender.address, 254).toLowerCase();
+  const senderDomain = senderAddress.split("@").at(-1) ?? "";
+  const authHeaders = parsed.headers.filter((header) => header.key === "authentication-results").map((header) => header.value);
+  const senderMailAuthenticated = direction === "outbound" || Boolean(senderDomain && senderPassedMailAuth(authHeaders, senderDomain));
   const before: MessageState = { folder: input.localFolder, unread, starred: input.flagged ? 1 : 0, spam: 0,
-    senderAddress, identityAddress: input.identity };
+    senderAddress, identityAddress };
   const plan = !input.suppressPush && direction === "inbound" && input.localFolder === "inbox"
     ? await planArrival(env, {
       messageId: id, senderName: cleanHeader(sender.name, 320), senderAddress,
-      recipients: recipients.map((recipient) => recipient.address).join(", ") || input.identity,
-      subject: cleanHeader(parsed.subject, 998), receivedAt, text: parsed.text ?? preview(parsed.text), identityAddress: input.identity,
-    }, before, await isTrustedSender(env, senderAddress),
-    { id, subject: cleanHeader(parsed.subject, 998), senderAddress, identityAddress: input.identity, receivedAt }).catch((error: unknown) => {
+      recipients: recipients.map((recipient) => recipient.address).join(", ") || identityAddress,
+      subject: cleanHeader(parsed.subject, 998), receivedAt, text: parsed.text ?? preview(parsed.text), identityAddress,
+    }, before, senderMailAuthenticated && await isTrustedSender(env, senderAddress, identityAddress),
+    { id, subject: cleanHeader(parsed.subject, 998), senderAddress, identityAddress, receivedAt, senderAuthenticated: senderMailAuthenticated }).catch((error: unknown) => {
       console.error(JSON.stringify({ event: "autopilot-arrival-failed", id, error: String(error).slice(0, 300) }));
       return null;
     })
@@ -267,14 +288,14 @@ export async function ingestExternalMessage(env: Env, input: ExternalIngestInput
   const insert = env.DB.prepare(`INSERT INTO messages
     (id, thread_id, message_id, in_reply_to, direction, folder, subject, sender_name, sender_address,
       recipients_json, cc_json, preview, text_key, html_key, raw_key, received_at, unread, starred,
-      has_attachments, attachment_count, stored_attachment_count, size, status, identity_address, external_folder, spam)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?)`)
+      has_attachments, attachment_count, stored_attachment_count, size, status, identity_address, external_folder, spam, sender_authenticated)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?)`)
     .bind(id, threadId, parsedMessageId, parsedInReplyTo, direction, decision.folder,
       cleanHeader(parsed.subject, 998), cleanHeader(sender.name, 320), senderAddress,
-      JSON.stringify(recipients.length ? recipients : [{ address: input.identity }]), JSON.stringify(cc), preview(parsed.text),
+      JSON.stringify(recipients.length ? recipients : [{ address: identityAddress }]), JSON.stringify(cc), preview(parsed.text),
       textKey, htmlKey, rawKey, receivedAt, decision.unread, decision.starred,
       parsed.attachments.length ? 1 : 0, parsed.attachments.length, storedAttachments.length,
-      input.raw.byteLength, input.identity, input.externalFolder, decision.spam);
+      input.raw.byteLength, identityAddress, input.externalFolder, decision.spam, senderMailAuthenticated ? 1 : 0);
   const statements: D1PreparedStatement[] = [insert, ...storedAttachments];
   if (plan) {
     statements.push(env.DB.prepare(`UPDATE messages SET ${assignments.sql} spam_model = ?, spam_checked_at = CURRENT_TIMESTAMP

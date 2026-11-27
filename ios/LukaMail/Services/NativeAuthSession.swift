@@ -212,7 +212,7 @@ final class NativeAuthSession: NSObject, ASWebAuthenticationPresentationContextP
         configuration.timeoutIntervalForResource = 60
         configuration.waitsForConnectivity = waitsForConnectivity
         configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        return URLSession(configuration: configuration)
+        return URLSession(configuration: configuration, delegate: NoRedirectDelegate.shared, delegateQueue: nil)
     }
 
     private static func randomURLSafeString(byteCount: Int) throws -> String {

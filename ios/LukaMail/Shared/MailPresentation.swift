@@ -164,6 +164,16 @@ extension Draft {
     }
 }
 
+enum MailSafeFilename {
+    static func token(_ value: String, fallback: String = "item") -> String {
+        let allowed = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
+        let mapped = String(value.map { allowed.contains($0) ? $0 : "_" })
+            .trimmingCharacters(in: CharacterSet(charactersIn: "_-"))
+        let truncated = String(mapped.prefix(80))
+        return truncated.isEmpty ? fallback : truncated
+    }
+}
+
 extension MailAttachment {
     var symbolName: String {
         if contentType.hasPrefix("image/") { return "photo" }
@@ -178,11 +188,15 @@ extension MailAttachment {
         Int64(size).formatted(.byteCount(style: .file))
     }
 
-    /// A temporary file URL for Quick Look; the filename is sanitized to a single path component.
+    /// A temporary file URL for Quick Look; both id and filename are sanitized to a single path component.
     func temporaryFileURL() -> URL {
         let directory = FileManager.default.temporaryDirectory.appending(path: "LukaMail", directoryHint: .isDirectory)
-        let sanitized = URL(fileURLWithPath: filename.replacingOccurrences(of: "\\", with: "_")).lastPathComponent
-        return directory.appending(path: "\(id)-\(sanitized.isEmpty ? "Attachment" : sanitized)")
+        let safeID = MailSafeFilename.token(id, fallback: "att")
+        let normalized = filename.replacingOccurrences(of: "\\", with: "/")
+        let leaf = URL(fileURLWithPath: normalized).lastPathComponent
+            .replacingOccurrences(of: "..", with: "_")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "._ "))
+        return directory.appending(path: "\(safeID)-\(leaf.isEmpty ? "Attachment" : String(leaf.prefix(120)))")
     }
 }
 

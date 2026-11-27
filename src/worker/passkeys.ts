@@ -10,7 +10,7 @@ import {
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
-import { authenticateWebSession, cookieValue, requireApiKey, securityHeaders, type ApiVariables } from "./auth";
+import { authenticateWebSession, cookieValue, hasScope, isSameOrigin, requireApiKey, type ApiVariables } from "./auth";
 import { appName, mailHost } from "./config";
 import { randomToken, sha256 } from "./crypto";
 import { nativeAuth } from "./native-auth";
@@ -24,9 +24,9 @@ type CredentialRow = { id: string; key_id: string; webauthn_user_id: string; pub
 const SESSION_COOKIE = "__Host-lmail-session";
 const SESSION_HOURS = 12;
 const CHALLENGE_MINUTES = 5;
+const ACTIVE_KEY_SQL = "k.revoked_at IS NULL AND (k.expires_at IS NULL OR datetime(k.expires_at) > datetime('now'))";
 
 export const passkeys = new Hono<PasskeyApp>();
-passkeys.use("*", securityHeaders);
 passkeys.use("*", async (c, next) => {
   const limited = await c.env.AUTH_RATE_LIMITER.limit({ key: `passkey:${c.req.header("CF-Connecting-IP") ?? "unknown"}` });
   if (!limited.success) return c.json({ error: "Too many authentication attempts" }, 429, { "Retry-After": "60" });
@@ -36,8 +36,17 @@ passkeys.use("*", bodyLimit({ maxSize: 256 * 1024, onError: (c) => c.json({ erro
 passkeys.route("/native", nativeAuth);
 
 const requireStaticApiKey: import("hono").MiddlewareHandler<PasskeyApp> = async (c, next) => {
-  if (c.get("authMethod") !== "api-key") {
-    return c.json({ error: "Passkey enrollment requires an administrator API key" }, 403);
+  const principal = c.get("principal");
+  if (c.get("authMethod") !== "api-key" || c.get("isDeviceKey")
+      || principal.allowedIdentities !== null || !hasScope(principal.scopes, "keys:write")) {
+    return c.json({ error: "Passkey enrollment requires an unrestricted administrator API key with keys:write" }, 403);
+  }
+  if (c.req.header("X-Admin-Confirmation") !== "user-approved") {
+    return c.json({ error: "Explicit user confirmation is required for passkey enrollment", requestId: c.get("requestId") }, 428);
+  }
+  const adminLimit = await c.env.ADMIN_RATE_LIMITER.limit({ key: principal.keyId });
+  if (!adminLimit.success) {
+    return c.json({ error: "Administrative rate limit exceeded", requestId: c.get("requestId") }, 429, { "Retry-After": "60" });
   }
   await next();
 };
@@ -45,7 +54,8 @@ const requireStaticApiKey: import("hono").MiddlewareHandler<PasskeyApp> = async 
 passkeys.get("/status", async (c) => {
   const [session, credentialCount] = await Promise.all([
     authenticateWebSession(c.env, cookieValue(c.req.header("Cookie"), SESSION_COOKIE)),
-    c.env.DB.prepare("SELECT COUNT(*) AS count FROM webauthn_credentials").first<{ count: number }>(),
+    c.env.DB.prepare(`SELECT COUNT(*) AS count FROM webauthn_credentials wc
+      JOIN api_keys k ON k.id = wc.key_id WHERE ${ACTIVE_KEY_SQL}`).first<{ count: number }>(),
   ]);
   return c.json({ authenticated: Boolean(session), setupRequired: (credentialCount?.count ?? 0) === 0,
     principal: session ? principalFromRow(session.row) : null });
@@ -99,7 +109,9 @@ passkeys.post("/passkeys/register/verify", requireApiKey, requireStaticApiKey, a
 passkeys.post("/passkeys/login/options", async (c) => {
   const context = relyingParty(c.req.raw, c.env);
   if (!context) return c.json({ error: "Passkey login is unavailable on this host" }, 400);
-  const credentials = await c.env.DB.prepare("SELECT id, transports_json FROM webauthn_credentials ORDER BY created_at").all<{ id: string; transports_json: string }>();
+  const credentials = await c.env.DB.prepare(`SELECT wc.id, wc.transports_json FROM webauthn_credentials wc
+    JOIN api_keys k ON k.id = wc.key_id WHERE ${ACTIVE_KEY_SQL} ORDER BY wc.created_at`)
+    .all<{ id: string; transports_json: string }>();
   if (credentials.results.length === 0) return c.json({ error: "No passkey has been enrolled", setupRequired: true }, 409);
   const options = await generateAuthenticationOptions({ rpID: context.rpID, timeout: 60_000, userVerification: "required",
     allowCredentials: credentials.results.map((credential) => ({ id: credential.id, transports: parseTransports(credential.transports_json) })) });
@@ -119,7 +131,8 @@ passkeys.post("/passkeys/login/verify", async (c) => {
   const response = input.data.response as AuthenticationResponseJSON;
   const [challenge, credential] = await Promise.all([
     consumeChallenge(c.env, input.data.challengeId, "authentication"),
-    c.env.DB.prepare("SELECT * FROM webauthn_credentials WHERE id = ?").bind(response.id).first<CredentialRow>(),
+    c.env.DB.prepare(`SELECT wc.* FROM webauthn_credentials wc JOIN api_keys k ON k.id = wc.key_id
+      WHERE wc.id = ? AND ${ACTIVE_KEY_SQL}`).bind(response.id).first<CredentialRow>(),
   ]);
   const context = relyingParty(c.req.raw, c.env);
   if (!challenge || !credential || !context) return c.json({ error: "Authentication challenge expired or credential unknown" }, 401);
@@ -145,14 +158,26 @@ passkeys.post("/passkeys/login/verify", async (c) => {
 });
 
 passkeys.post("/logout", async (c) => {
+  const origin = c.req.header("Origin");
+  const fetchSite = c.req.header("Sec-Fetch-Site");
+  if ((origin !== undefined && !isSameOrigin(c.req.raw))
+      || (fetchSite !== undefined && fetchSite !== "same-origin" && fetchSite !== "none")) {
+    return c.json({ error: "Cross-origin mutation rejected" }, 403);
+  }
   const token = cookieValue(c.req.header("Cookie"), SESSION_COOKIE);
-  if (token) await c.env.DB.prepare("DELETE FROM web_sessions WHERE token_hash = ?").bind(await sha256(token)).run();
+  if (token) {
+    const active = await authenticateWebSession(c.env, token);
+    if (active && !isSameOrigin(c.req.raw)) {
+      return c.json({ error: "Cross-origin mutation rejected" }, 403);
+    }
+    await c.env.DB.prepare("DELETE FROM web_sessions WHERE token_hash = ?").bind(await sha256(token)).run();
+  }
   c.header("Set-Cookie", `${SESSION_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0`);
   return c.json({ authenticated: false });
 });
 
 async function consumeChallenge(env: Env, id: string, kind: string): Promise<ChallengeRow | null> {
-  const challenge = await env.DB.prepare(`SELECT * FROM webauthn_challenges WHERE id = ? AND kind = ? AND expires_at > CURRENT_TIMESTAMP`)
+  const challenge = await env.DB.prepare(`SELECT * FROM webauthn_challenges WHERE id = ? AND kind = ? AND datetime(expires_at) > datetime('now')`)
     .bind(id, kind).first<ChallengeRow>();
   if (!challenge) return null;
   const deleted = await env.DB.prepare("DELETE FROM webauthn_challenges WHERE id = ? AND challenge = ?").bind(id, challenge.challenge).run();
